@@ -1,0 +1,181 @@
+{
+    "total_grand": 91241000,
+    "total_billable": null,
+    "total_currencies": [
+        {
+            "currency": null,
+            "amount": null
+        }
+    ],
+    "data": [
+        {
+            "title": {
+                "client": "Legacy"
+            },
+            "time": 22097000,
+            "total_currencies": [
+                {
+                    "currency": null,
+                    "amount": null
+                }
+            ],
+            "items": [
+                {
+                    "title": {
+                        "project": "LP-Support"
+                    },
+                    "time": 13455000,
+                    "cur": null,
+                    "sum": null,
+                    "rate": null
+                },
+                {
+                    "title": {
+                        "project": "LP-Build"
+                    },
+                    "time": 2419000,
+                    "cur": null,
+                    "sum": null,
+                    "rate": null
+                },
+                {
+                    "title": {
+                        "project": "LP-Release"
+                    },
+                    "time": 6223000,
+                    "cur": null,
+                    "sum": null,
+                    "rate": null
+                }
+            ]
+        },
+        {
+            "title": {
+                "client": "Client-1"
+            },
+            "time": 17407000,
+            "total_currencies": [
+                {
+                    "currency": null,
+                    "amount": null
+                }
+            ],
+            "items": [
+                {
+                    "title": {
+                        "project": "Client-1-Project1"
+                    },
+                    "time": 17407000,
+                    "cur": null,
+                    "sum": null,
+                    "rate": null
+                }
+            ]
+        },
+        {
+            "title": {
+                "client": "Client-2"
+            },
+            "time": 29893000,
+            "total_currencies": [
+                {
+                    "currency": null,
+                    "amount": null
+                }
+            ],
+            "items": [
+                {
+                    "title": {
+                        "project": "Client-2-Design"
+                    },
+                    "time": 10157000,
+                    "cur": null,
+                    "sum": null,
+                    "rate": null
+                },
+                {
+                    "title": {
+                        "project": "Client-2-General"
+                    },
+                    "time": 2113000,
+                    "cur": null,
+                    "sum": null,
+                    "rate": null
+                },
+                {
+                    "title": {
+                        "project": "Client-2-API"
+                    },
+                    "time": 6870000,
+                    "cur": null,
+                    "sum": null,
+                    "rate": null
+                },
+                {
+                    "title": {
+                        "project": "Client-2-UI"
+                    },
+                    "time": 10753000,
+                    "cur": null,
+                    "sum": null,
+                    "rate": null
+                }
+            ]
+        },
+        {
+            "title": {
+                "client": "Client-3"
+            },
+            "time": 9352000,
+            "total_currencies": [
+                {
+                    "currency": null,
+                    "amount": null
+                }
+            ],
+            "items": [
+                {
+                    "title": {
+                        "project": "Client-3-CrossProject"
+                    },
+                    "time": 5076000,
+                    "cur": null,
+                    "sum": null,
+                    "rate": null
+                },
+                {
+                    "title": {
+                        "project": "Client-3-Platform"
+                    },
+                    "time": 4276000,
+                    "cur": null,
+                    "sum": null,
+                    "rate": null
+                }
+            ]
+        },
+        {
+            "title": {
+                "client": null
+            },
+            "time": 12492000,
+            "total_currencies": [
+                {
+                    "currency": null,
+                    "amount": null
+                }
+            ],
+            "items": [
+                {
+                    "title": {
+                        "project": null
+                    },
+                    "time": 12492000,
+                    "cur": null,
+                    "sum": null,
+                    "rate": null
+                }
+            ]
+        }
+    ]
+}
