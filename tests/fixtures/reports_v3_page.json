@@ -1,0 +1,26 @@
+[
+  {
+    "description": "Sanitised work entry",
+    "client_name": "Client",
+    "project_id": 1001,
+    "project_name": "Project",
+    "tag_names": ["work"],
+    "tag_ids": [2001],
+    "time_entries": [
+      {
+        "id": 1,
+        "start": "2026-08-08T09:00:00+01:00",
+        "stop": "2026-08-08T10:00:00+01:00",
+        "seconds": 3599,
+        "at": "2026-08-08T10:00:01+01:00"
+      },
+      {
+        "id": 2,
+        "start": "2026-08-08T10:00:00+01:00",
+        "stop": null,
+        "seconds": -1,
+        "at": "2026-08-08T10:00:01+01:00"
+      }
+    ]
+  }
+]

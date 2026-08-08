@@ -1,0 +1,125 @@
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+from toggl_cli.domain import (
+    ReportingPeriod,
+    TimeEntry,
+    calculate_summary,
+    calculate_time_totals,
+    format_duration,
+)
+from toggl_cli.render import render_report
+
+UTC = ZoneInfo("UTC")
+REPORT_NOW = datetime(2026, 8, 8, 17, 0, tzinfo=UTC)
+
+
+def entry(
+    identifier: int,
+    start: str,
+    stop: str | None,
+    duration_ms: int,
+    *,
+    tags: tuple[str, ...] = (),
+    client: str | None = "Client",
+    project: str | None = "Project",
+) -> TimeEntry:
+    return TimeEntry(
+        id=identifier,
+        description=f"entry {identifier}",
+        start=datetime.fromisoformat(start),
+        stop=datetime.fromisoformat(stop) if stop else None,
+        duration_ms=duration_ms,
+        tags=tags,
+        client_name=client,
+        project_name=project,
+    )
+
+
+def test_marker_state_stays_open_across_consecutive_markers() -> None:
+    entries = [
+        entry(
+            1,
+            "2026-08-08T09:00:00+00:00",
+            "2026-08-08T09:05:00+00:00",
+            5 * 60_000,
+            tags=("marker",),
+        ),
+        entry(
+            2, "2026-08-08T10:00:00+00:00", "2026-08-08T10:01:00+00:00", 60_000, tags=("marker",)
+        ),
+        entry(3, "2026-08-08T11:00:00+00:00", "2026-08-08T12:00:00+00:00", 60 * 60_000),
+    ]
+
+    result = calculate_time_totals(entries, REPORT_NOW, UTC)
+
+    assert result.booked_ms == 60 * 60_000
+    assert result.break_ms == 114 * 60_000
+    assert result.unbooked_ms == 0
+
+
+def test_overlaps_are_clamped_and_long_overlaps_warn() -> None:
+    entries = [
+        entry(1, "2026-08-08T09:00:00+00:00", "2026-08-08T10:00:00+00:00", 60 * 60_000),
+        entry(2, "2026-08-08T09:50:00+00:00", "2026-08-08T10:30:00+00:00", 40 * 60_000),
+    ]
+
+    result = calculate_time_totals(entries, REPORT_NOW, UTC)
+
+    assert result.unbooked_ms == 0
+    assert result.time_count_ms == result.booked_ms
+    assert "Overlap" in result.warnings[0]
+
+
+def test_cross_day_gaps_are_not_counted() -> None:
+    entries = [
+        entry(1, "2026-08-08T23:00:00+00:00", "2026-08-08T23:30:00+00:00", 30 * 60_000),
+        entry(2, "2026-08-09T09:00:00+00:00", "2026-08-09T10:00:00+00:00", 60 * 60_000),
+    ]
+
+    result = calculate_time_totals(entries, REPORT_NOW, UTC)
+
+    assert result.unbooked_ms == 0
+    assert result.time_count_ms == 90 * 60_000
+
+
+def test_summary_uses_booked_entries_and_has_stable_rendering() -> None:
+    entries = [
+        entry(
+            1,
+            "2026-08-08T09:00:00+00:00",
+            "2026-08-08T10:00:00+00:00",
+            60 * 60_000,
+            project="Alpha",
+        ),
+        entry(
+            2, "2026-08-08T10:30:00+00:00", "2026-08-08T11:00:00+00:00", 30 * 60_000, project="Beta"
+        ),
+    ]
+    total = calculate_time_totals(entries, REPORT_NOW, UTC)
+    summary = calculate_summary(entries, total)
+
+    assert [group.name for group in summary] == ["Client", "Unbooked Time"]
+    assert [child.name for child in summary[0].children] == ["Alpha", "Beta"]
+    rendered_summary = render_report(
+        ReportingPeriod(datetime(2026, 8, 8).date(), datetime(2026, 8, 8).date()),
+        total,
+        True,
+        summary,
+    )
+    assert "# Summary" in rendered_summary
+    assert "  * Alpha:" in rendered_summary
+    assert rendered_summary.endswith("\n\n")
+    assert render_report(
+        ReportingPeriod(datetime(2026, 8, 8).date(), datetime(2026, 8, 8).date()), total, False
+    ) == (
+        "# Totals for 2026-08-08 to 2026-08-08\n\n"
+        "* Booked time: 01:30:00\n"
+        "* Unbooked time: 00:30:00\n"
+        "* Break time: 00:00:00\n"
+        "* Total time (booked + unbooked): 02:00:00\n"
+    )
+
+
+def test_format_duration_supports_more_than_a_day() -> None:
+    assert format_duration(100 * 60 * 60 * 1000 + 2 * 60 * 1000 + 3 * 1000) == "100:02:03"
