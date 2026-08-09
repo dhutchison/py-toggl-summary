@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta, tzinfo
+from datetime import UTC, date, datetime, timedelta, tzinfo
 
 MARKER_TAG = "marker"
 UNKNOWN_GROUP = "Unknown Client/Project"
@@ -81,7 +81,7 @@ def calculate_time_totals(
     until the next non-marker on the same reporting day.
     """
 
-    ordered = sorted(entries, key=lambda entry: (entry.start, entry.id))
+    ordered = sorted(entries, key=lambda entry: (entry.start.astimezone(UTC), entry.id))
     booked_ms = break_ms = unbooked_ms = 0
     warnings: list[str] = []
 
@@ -98,9 +98,9 @@ def calculate_time_totals(
 
         previous = ordered[index - 1]
         previous_stop = effective_stop(previous)
-        gap = entry.start - previous_stop
+        gap = entry.start.astimezone(UTC) - previous_stop.astimezone(UTC)
         if gap < timedelta():
-            overlap = previous_stop - entry.start
+            overlap = previous_stop.astimezone(UTC) - entry.start.astimezone(UTC)
             if overlap > OVERLAP_WARNING_THRESHOLD:
                 warnings.append(
                     f"Overlap of {format_duration(int(overlap.total_seconds() * 1000))} "

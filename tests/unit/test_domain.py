@@ -83,6 +83,78 @@ def test_cross_day_gaps_are_not_counted() -> None:
     assert result.time_count_ms == 90 * 60_000
 
 
+def test_spring_forward_gap_uses_elapsed_time() -> None:
+    timezone = ZoneInfo("Europe/London")
+    entries = [
+        TimeEntry(
+            1,
+            "entry 1",
+            datetime(2026, 3, 29, 0, tzinfo=timezone),
+            datetime(2026, 3, 29, 0, 30, tzinfo=timezone),
+            30 * 60_000,
+        ),
+        TimeEntry(
+            2,
+            "entry 2",
+            datetime(2026, 3, 29, 2, 30, tzinfo=timezone),
+            datetime(2026, 3, 29, 3, tzinfo=timezone),
+            30 * 60_000,
+        ),
+    ]
+
+    result = calculate_time_totals(entries, REPORT_NOW, timezone)
+
+    assert result.unbooked_ms == 60 * 60_000
+
+
+def test_fall_back_gap_uses_elapsed_time() -> None:
+    timezone = ZoneInfo("Europe/London")
+    entries = [
+        TimeEntry(
+            1,
+            "entry 1",
+            datetime(2026, 10, 25, 0, tzinfo=timezone),
+            datetime(2026, 10, 25, 0, 30, tzinfo=timezone),
+            30 * 60_000,
+        ),
+        TimeEntry(
+            2,
+            "entry 2",
+            datetime(2026, 10, 25, 2, 30, tzinfo=timezone),
+            datetime(2026, 10, 25, 3, tzinfo=timezone),
+            30 * 60_000,
+        ),
+    ]
+
+    result = calculate_time_totals(entries, REPORT_NOW, timezone)
+
+    assert result.unbooked_ms == 3 * 60 * 60_000
+
+
+def test_fall_back_overlap_warning_uses_elapsed_time() -> None:
+    timezone = ZoneInfo("Europe/London")
+    entries = [
+        TimeEntry(
+            1,
+            "entry 1",
+            datetime(2026, 10, 25, 0, tzinfo=timezone),
+            datetime(2026, 10, 25, 1, 30, tzinfo=timezone, fold=1),
+            90 * 60_000,
+        ),
+        TimeEntry(
+            2,
+            "entry 2",
+            datetime(2026, 10, 25, 1, 15, tzinfo=timezone),
+            datetime(2026, 10, 25, 2, tzinfo=timezone),
+            45 * 60_000,
+        ),
+    ]
+
+    result = calculate_time_totals(entries, REPORT_NOW, timezone)
+
+    assert "Overlap of 01:15:00" in result.warnings[0]
+
+
 def test_summary_uses_booked_entries_and_has_stable_rendering() -> None:
     entries = [
         entry(

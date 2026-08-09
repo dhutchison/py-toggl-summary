@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -30,3 +30,44 @@ def test_report_requires_a_workspace() -> None:
 
     with pytest.raises(ConfigError, match="No workspace"):
         ReportService(NoWorkspaceApi(), Settings()).run(date(2026, 8, 8), False, False)
+
+
+def test_report_uses_profile_timezone_for_default_day_and_running_entry() -> None:
+    observed: dict[str, object] = {}
+
+    class LondonApi:
+        def get_profile(self) -> Profile:
+            return Profile(ZoneInfo("Europe/London"), 1, 42)
+
+        def get_detailed_entries(
+            self, workspace_id: int, start_date: date, end_date: date, report_now: datetime
+        ) -> tuple[TimeEntry, ...]:
+            observed.update(
+                workspace_id=workspace_id,
+                start_date=start_date,
+                end_date=end_date,
+                report_now=report_now,
+            )
+            return (
+                TimeEntry(
+                    id=1,
+                    description="running",
+                    start=datetime(2026, 10, 25, 0, tzinfo=UTC),
+                    stop=None,
+                    duration_ms=30 * 60_000,
+                ),
+            )
+
+    period, total, _ = ReportService(
+        LondonApi(), Settings(), clock=lambda: datetime(2026, 10, 25, 0, 30, tzinfo=UTC)
+    ).run(None, False, False)
+
+    assert period.start == date(2026, 10, 25)
+    assert period.end == date(2026, 10, 25)
+    assert total.booked_ms == 30 * 60_000
+    assert observed == {
+        "workspace_id": 42,
+        "start_date": date(2026, 10, 25),
+        "end_date": date(2026, 10, 25),
+        "report_now": datetime(2026, 10, 25, 1, 30, tzinfo=ZoneInfo("Europe/London")),
+    }

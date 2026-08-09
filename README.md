@@ -45,3 +45,27 @@ toggl-cli report --day 2026-08-08 --week --include-summary
 
 `--debug` sends redacted diagnostics to stderr. Report Markdown is written to
 stdout, so it can be passed directly to another command.
+
+## Live smoke verification
+
+Tests are offline by default. To make one narrow, read-only Reports API v2
+request against the configured account, supply an explicit date and opt in.
+
+On macOS/Linux:
+
+```text
+env TOGGL_CLI_LIVE_SMOKE=1 TOGGL_CLI_LIVE_DAY=2026-08-08 uv run pytest -m live
+```
+
+On Windows PowerShell:
+
+```text
+$env:TOGGL_CLI_LIVE_SMOKE = "1"; $env:TOGGL_CLI_LIVE_DAY = "2026-08-08"; uv run pytest -m live
+```
+
+The smoke test reads the token from the OS credential store and workspace from
+the local TOML settings. It does not write Toggl data, print the token, or
+refresh committed fixtures. If a contract fixture needs refreshing, run this
+smoke first and then follow the separate, manual in-memory sanitisation and
+provenance steps documented in `tests/fixtures/README.md`; never redirect a
+raw authenticated response to a file.

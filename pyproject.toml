@@ -40,6 +40,7 @@ version_files = ["pyproject.toml:version"]
 
 [tool.pytest.ini_options]
 addopts = ["--strict-config", "--strict-markers"]
+markers = ["live: opt-in read-only Toggl API smoke tests"]
 testpaths = ["tests"]
 
 [tool.coverage.run]
