@@ -9,7 +9,7 @@ from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from .domain import TimeEntry
 
@@ -39,36 +39,31 @@ class ProfileDTO(BaseModel):
     default_workspace_id: int | None = None
 
 
-class DetailedRowDTO(BaseModel):
+class DetailedV2RowDTO(BaseModel):
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
     id: int
     start: datetime
-    stop: datetime | None = None
-    seconds: float | None = None
+    end: datetime | None = None
+    dur: int
     description: str | None = None
-    tag_names: list[str] | None = None
-    tag_ids: list[int] | None = None
-    task_id: int | None = None
-    task_name: str | None = None
-    user_id: int | None = None
-    username: str | None = None
+    tags: list[str] | None = None
+    pid: int | None = None
+    project: str | None = None
+    client: str | None = None
+    tid: int | None = None
+    task: str | None = None
+    uid: int | None = None
+    user: str | None = None
+    use_stop: bool = True
 
 
-class DetailedWrapperDTO(BaseModel):
+class DetailedV2ResponseDTO(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    description: str | None = None
-    client_name: str | None = None
-    project_id: int | None = None
-    project_name: str | None = None
-    tag_names: list[str] | None = None
-    tag_ids: list[int] | None = None
-    task_id: int | None = None
-    task_name: str | None = None
-    user_id: int | None = None
-    username: str | None = None
-    time_entries: list[DetailedRowDTO] = Field(default_factory=list)
+    total_count: int
+    per_page: int
+    data: list[DetailedV2RowDTO]
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,91 +147,67 @@ class TogglApi:
         end_date: date,
         report_now: datetime,
     ) -> tuple[TimeEntry, ...]:
-        body: dict[str, Any] = {
-            "start_date": start_date.isoformat(),
-            "end_date": end_date.isoformat(),
-            "enrich_response": True,
-            "grouped": False,
-            "order_by": "date",
-            "order_dir": "ASC",
-            "page_size": 50,
-            "rounding": 0,
-        }
-        next_row: int | None = None
-        seen_cursors: set[int] = set()
+        page = 1
         entries: dict[int, TimeEntry] = {}
 
         while True:
-            request_body = dict(body)
-            if next_row is not None:
-                request_body["first_row_number"] = next_row
             response = self._request(
-                "POST",
-                f"{self._reports_base_url}/reports/api/v3/workspace/{workspace_id}/search/time_entries",
-                json=request_body,
+                "GET",
+                f"{self._reports_base_url}/reports/api/v2/details",
+                params={
+                    "page": page,
+                    "user_agent": "toggl-cli",
+                    "workspace_id": workspace_id,
+                    "since": start_date.isoformat(),
+                    "until": end_date.isoformat(),
+                },
             )
             try:
-                payload = response.json()
-                if isinstance(payload, dict):
-                    payload = payload.get("data", [])
-                wrappers = TypeAdapter(list[DetailedWrapperDTO]).validate_python(payload)
+                report = DetailedV2ResponseDTO.model_validate(response.json())
+                if report.total_count < 0 or report.per_page <= 0:
+                    raise ValueError("invalid pagination metadata")
             except (ValidationError, TypeError, ValueError) as error:
                 raise ApiError("Toggl returned an invalid detailed report page.") from error
 
-            for wrapper in wrappers:
-                for row in wrapper.time_entries:
-                    entries[row.id] = self._to_entry(wrapper, row, report_now)
+            for row in report.data:
+                entries[row.id] = self._to_v2_entry(row, report_now)
 
             if self._diagnostics:
-                pagination = {
-                    key: value
-                    for key, value in response.headers.items()
-                    if key.lower() in {"x-next-id", "x-range-start", "x-range-end"}
-                }
-                if pagination:
-                    self._diagnostics(f"pagination {pagination}")
+                self._diagnostics(
+                    f"pagination page={page} per_page={report.per_page} "
+                    f"total_count={report.total_count}"
+                )
 
-            cursor_value = response.headers.get("X-Next-Row-Number")
-            if cursor_value is None:
+            if (
+                not report.data
+                or len(report.data) < report.per_page
+                or len(entries) >= report.total_count
+            ):
                 break
-            try:
-                next_row = int(cursor_value)
-            except ValueError as error:
-                raise ApiError("Toggl returned an invalid pagination cursor.") from error
-            if next_row in seen_cursors:
-                raise ApiError("Toggl returned a repeated pagination cursor.")
-            seen_cursors.add(next_row)
+            page += 1
 
         return tuple(sorted(entries.values(), key=lambda entry: (entry.start, entry.id)))
 
     @staticmethod
-    def _to_entry(
-        wrapper: DetailedWrapperDTO, row: DetailedRowDTO, report_now: datetime
-    ) -> TimeEntry:
-        if row.start.tzinfo is None or (row.stop is not None and row.stop.tzinfo is None):
+    def _to_v2_entry(row: DetailedV2RowDTO, report_now: datetime) -> TimeEntry:
+        if row.start.tzinfo is None or (row.end is not None and row.end.tzinfo is None):
             raise ApiError(f"Toggl returned a timezone-naive timestamp for entry {row.id}.")
-        if row.stop is not None:
-            calculated_ms = int((row.stop - row.start).total_seconds() * 1000)
+        if row.end is not None and row.dur >= 0:
+            duration_ms = row.dur
         else:
-            calculated_ms = int((report_now - row.start).total_seconds() * 1000)
-        duration_ms = (
-            calculated_ms if row.seconds is None or row.seconds < 0 else int(row.seconds * 1000)
-        )
-        tags = tuple(row.tag_names if row.tag_names is not None else wrapper.tag_names or ())
-        tag_ids = tuple(row.tag_ids if row.tag_ids is not None else wrapper.tag_ids or ())
+            duration_ms = int((report_now - row.start).total_seconds() * 1000)
         return TimeEntry(
             id=row.id,
-            description=row.description or wrapper.description or "",
+            description=row.description or "",
             start=row.start,
-            stop=row.stop,
+            stop=row.end,
             duration_ms=max(0, duration_ms),
-            tags=tags,
-            tag_ids=tag_ids,
-            client_name=wrapper.client_name,
-            project_name=wrapper.project_name,
-            project_id=wrapper.project_id,
-            task_id=row.task_id if row.task_id is not None else wrapper.task_id,
-            task_name=row.task_name if row.task_name is not None else wrapper.task_name,
-            user_id=row.user_id if row.user_id is not None else wrapper.user_id,
-            username=row.username if row.username is not None else wrapper.username,
+            tags=tuple(row.tags or ()),
+            client_name=row.client,
+            project_name=row.project,
+            project_id=row.pid,
+            task_id=row.tid,
+            task_name=row.task,
+            user_id=row.uid,
+            username=row.user,
         )

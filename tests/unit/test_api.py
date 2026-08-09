@@ -8,10 +8,10 @@ import pytest
 
 from toggl_cli.api import ApiError, TogglApi
 
-FIXTURE = Path(__file__).parents[1] / "fixtures" / "reports_v3_page.json"
+FIXTURE = Path(__file__).parents[1] / "fixtures" / "reports_v2_page.json"
 
 
-def test_profile_and_detailed_adapter_follow_cursor_and_deduplicate() -> None:
+def test_profile_and_detailed_adapter_follow_v2_pages_and_map_entries() -> None:
     requests: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -25,36 +25,41 @@ def test_profile_and_detailed_adapter_follow_cursor_and_deduplicate() -> None:
                     "default_workspace_id": 42,
                 },
             )
-        body = request.read().decode()
-        if '"first_row_number":50' in body:
-            return httpx.Response(
-                200,
-                json=[
-                    {
-                        "client_name": "Client",
-                        "project_name": "Project",
-                        "time_entries": [
-                            {
-                                "id": 1,
-                                "start": "2026-08-08T09:00:00+01:00",
-                                "stop": "2026-08-08T10:00:00+01:00",
-                                "seconds": 3599,
-                            },
+        if request.url.path == "/reports/api/v2/details":
+            assert request.url.params["workspace_id"] == "42"
+            assert request.url.params["since"] == "2026-08-08"
+            assert request.url.params["until"] == "2026-08-08"
+            assert request.url.params["user_agent"] == "toggl-cli"
+            if request.url.params["page"] == "2":
+                return httpx.Response(
+                    200,
+                    json={
+                        "total_grand": 7_200_000,
+                        "total_count": 2,
+                        "per_page": 1,
+                        "data": [
                             {
                                 "id": 2,
+                                "description": "Running work",
                                 "start": "2026-08-08T10:00:00+01:00",
-                                "stop": None,
-                                "seconds": -1,
-                            },
+                                "end": None,
+                                "dur": -1,
+                                "tags": ["active"],
+                                "pid": 11,
+                                "project": "Project",
+                                "client": "Client",
+                                "tid": 21,
+                                "task": "Task",
+                                "uid": 31,
+                                "user": "Person",
+                                "updated": "2026-08-08T10:00:00+01:00",
+                                "use_stop": False,
+                            }
                         ],
-                    }
-                ],
-            )
-        return httpx.Response(
-            200,
-            headers={"X-Next-Row-Number": "50"},
-            json=json.loads(FIXTURE.read_text()),
-        )
+                    },
+                )
+            return httpx.Response(200, json=json.loads(FIXTURE.read_text()))
+        raise AssertionError(f"unexpected request path: {request.url.path}")
 
     api = TogglApi("secret-token", transport=httpx.MockTransport(handler))
     try:
@@ -72,6 +77,9 @@ def test_profile_and_detailed_adapter_follow_cursor_and_deduplicate() -> None:
     assert [item.id for item in entries] == [1, 2]
     assert entries[0].duration_ms == 3_599_000
     assert entries[1].duration_ms == 2 * 60 * 60 * 1000
+    assert entries[0].client_name == "Client"
+    assert entries[0].project_id == 11
+    assert entries[0].tags == ("focus",)
     assert requests[1].headers["Authorization"].startswith("Basic ")
 
 
@@ -95,13 +103,13 @@ def test_api_error_is_classified_without_exposing_authentication() -> None:
     assert raised.value.headers == {"x-toggl-quota-remaining": "29"}
 
 
-def test_repeated_pagination_cursor_is_rejected() -> None:
+def test_invalid_v2_report_page_is_rejected() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, headers={"X-Next-Row-Number": "50"}, json=[])
+        return httpx.Response(200, json={"data": "not-a-page"})
 
     api = TogglApi("secret-token", transport=httpx.MockTransport(handler))
     try:
-        with pytest.raises(ApiError, match="repeated pagination"):
+        with pytest.raises(ApiError, match="invalid detailed report page"):
             api.get_detailed_entries(
                 42,
                 datetime(2026, 8, 8).date(),
@@ -124,11 +132,14 @@ def test_invalid_profile_is_rejected() -> None:
         api.close()
 
 
-def test_invalid_report_page_and_cursor_are_rejected() -> None:
-    def bad_page(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"data": "not-a-page"})
+def test_invalid_v2_pagination_metadata_is_rejected() -> None:
+    def bad_metadata(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"data": [], "total_count": 0, "per_page": "invalid"},
+        )
 
-    api = TogglApi("secret-token", transport=httpx.MockTransport(bad_page))
+    api = TogglApi("secret-token", transport=httpx.MockTransport(bad_metadata))
     try:
         with pytest.raises(ApiError, match="invalid detailed report page"):
             api.get_detailed_entries(
@@ -140,30 +151,14 @@ def test_invalid_report_page_and_cursor_are_rejected() -> None:
     finally:
         api.close()
 
-    def bad_cursor(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, headers={"X-Next-Row-Number": "invalid"}, json=[])
 
-    api = TogglApi("secret-token", transport=httpx.MockTransport(bad_cursor))
-    try:
-        with pytest.raises(ApiError, match="invalid pagination cursor"):
-            api.get_detailed_entries(
-                42,
-                datetime(2026, 8, 8).date(),
-                datetime(2026, 8, 8).date(),
-                datetime(2026, 8, 8, 12, tzinfo=ZoneInfo("UTC")),
-            )
-    finally:
-        api.close()
-
-
-def test_debug_diagnostics_include_safe_pagination_headers() -> None:
+def test_debug_diagnostics_include_safe_v2_pagination() -> None:
     messages: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
-            headers={"X-Next-ID": "9002", "X-Range-Start": "start"},
-            json=[],
+            json={"data": [], "total_count": 0, "per_page": 50},
         )
 
     api = TogglApi(
@@ -179,4 +174,4 @@ def test_debug_diagnostics_include_safe_pagination_headers() -> None:
     finally:
         api.close()
 
-    assert any("x-next-id" in message for message in messages)
+    assert any("pagination page=1" in message for message in messages)
