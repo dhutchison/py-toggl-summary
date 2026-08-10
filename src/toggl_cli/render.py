@@ -1,6 +1,12 @@
 """Stable, plain-text report rendering."""
 
-from .domain import ReportingPeriod, SummaryGroup, TimeSummary, format_duration
+from .domain import (
+    ActivityTypeSummary,
+    ReportingPeriod,
+    SummaryGroup,
+    TimeSummary,
+    format_duration,
+)
 
 
 def _render_group(group: SummaryGroup, indent: str = "") -> list[str]:
@@ -17,6 +23,7 @@ def render_report(
     total: TimeSummary,
     include_summary: bool,
     summary: tuple[SummaryGroup, ...] = (),
+    activity_summary: tuple[ActivityTypeSummary, ...] | None = None,
 ) -> str:
     lines = [
         f"# Totals for {period.start.isoformat()} to {period.end.isoformat()}",
@@ -30,5 +37,13 @@ def render_report(
         lines.extend(["", "# Summary", ""])
         for group in summary:
             lines.extend(_render_group(group))
+            lines.append("")
+        if activity_summary is not None:
+            lines.extend(["# Activity Type Summary", ""])
+            for activity in activity_summary:
+                lines.append(
+                    f"* {activity.name}: {activity.percentage:.2f}% "
+                    f"({format_duration(activity.booked_ms)})"
+                )
             lines.append("")
     return "\n".join(lines) + "\n"

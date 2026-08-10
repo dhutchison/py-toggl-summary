@@ -15,6 +15,8 @@ import tomli_w
 from keyring.errors import KeyringError
 from platformdirs import user_config_path
 
+from .domain import DEFAULT_ACTIVITY_TYPES
+
 CONFIG_SERVICE = "toggl-cli"
 CONFIG_ACCOUNT = "api-token"
 SECRET_KEY_PARTS = ("token", "password", "authorization", "secret")
@@ -47,8 +49,15 @@ class KeyringCredentialStore:
 
 
 @dataclass(frozen=True, slots=True)
+class ReviewSettings:
+    activity_types: tuple[str, ...] = DEFAULT_ACTIVITY_TYPES
+    jira_activity_types: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class Settings:
     workspace_id: int | None = None
+    review: ReviewSettings = field(default_factory=ReviewSettings)
     raw_config: dict[str, Any] = field(default_factory=dict, compare=False, repr=False)
 
 
@@ -68,6 +77,64 @@ def default_config_path() -> Path:
     return Path(user_config_path("toggl-cli", appauthor=False)) / "config.toml"
 
 
+def _validated_string_list(
+    value: Any,
+    *,
+    setting: str,
+    path: Path,
+    allow_empty: bool,
+) -> list[str]:
+    if not isinstance(value, list) or (not allow_empty and not value):
+        qualifier = "a non-empty array" if not allow_empty else "an array"
+        raise ConfigError(f"{path}: review.{setting} must be {qualifier} of strings.")
+    result: list[str] = []
+    seen: set[str] = set()
+    for index, item in enumerate(value):
+        if not isinstance(item, str) or not item or item != item.strip():
+            raise ConfigError(
+                f"{path}: review.{setting}[{index}] must be a non-blank string "
+                "without surrounding whitespace."
+            )
+        key = item.casefold()
+        if key in seen:
+            raise ConfigError(f"{path}: review.{setting}[{index}] duplicates another value.")
+        if key == "marker":
+            raise ConfigError(
+                f"{path}: review.{setting}[{index}] uses reserved activity type marker."
+            )
+        seen.add(key)
+        result.append(item)
+    return result
+
+
+def _review_settings(raw: dict[str, Any], path: Path) -> ReviewSettings:
+    review = raw.get("review", {})
+    if not isinstance(review, dict):
+        raise ConfigError(f"{path}: review must be a TOML table.")
+    activity_value = review.get("activity_types", list(DEFAULT_ACTIVITY_TYPES))
+    activities = _validated_string_list(
+        activity_value, setting="activity_types", path=path, allow_empty=False
+    )
+    jira_value = review.get("jira_activity_types", [])
+    jira = _validated_string_list(
+        jira_value, setting="jira_activity_types", path=path, allow_empty=True
+    )
+    by_key = {activity.casefold(): activity for activity in activities}
+    unknown = [value for value in jira if value.casefold() not in by_key]
+    if unknown:
+        raise ConfigError(
+            f"{path}: review.jira_activity_types contains value outside "
+            f"activity_types: {unknown[0]!r}."
+        )
+    jira_keys = {value.casefold() for value in jira}
+    return ReviewSettings(
+        activity_types=tuple(activities),
+        jira_activity_types=tuple(
+            activity for activity in activities if activity.casefold() in jira_keys
+        ),
+    )
+
+
 def load_settings(path: Path | None = None) -> Settings:
     config_path = path or default_config_path()
     if not config_path.exists():
@@ -79,7 +146,11 @@ def load_settings(path: Path | None = None) -> Settings:
         workspace = toggl.get("workspace_id")
         if workspace is not None and (not isinstance(workspace, int) or workspace <= 0):
             raise ConfigError("config.toml contains an invalid toggl.workspace_id.")
-        return Settings(workspace_id=workspace, raw_config=raw)
+        return Settings(
+            workspace_id=workspace,
+            review=_review_settings(raw, config_path),
+            raw_config=raw,
+        )
     except ConfigError:
         raise
     except (OSError, tomllib.TOMLDecodeError, AttributeError) as error:
@@ -107,6 +178,11 @@ def save_settings(
         else:
             toggl_settings.pop("workspace_id", None)
         raw_config["toggl"] = toggl_settings
+        if "review" in raw_config or settings.review != ReviewSettings():
+            review_settings = dict(raw_config.get("review", {}))
+            review_settings["activity_types"] = list(settings.review.activity_types)
+            review_settings["jira_activity_types"] = list(settings.review.jira_activity_types)
+            raw_config["review"] = review_settings
         temporary_path.write_text(tomli_w.dumps(raw_config), encoding="utf-8")
         os.chmod(temporary_path, stat.S_IRUSR | stat.S_IWUSR)
         temporary_path.replace(config_path)

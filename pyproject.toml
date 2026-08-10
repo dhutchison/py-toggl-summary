@@ -1,7 +1,7 @@
 [project]
 name = "toggl-cli"
 version = "0.1.0"
-description = "Read-only Toggl work-time reports"
+description = "Toggl work-time reports and interactive entry review"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

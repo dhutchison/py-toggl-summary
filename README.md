@@ -1,8 +1,9 @@
 # toggl-cli
 
 `toggl-cli` produces a pipeable Markdown report of booked, unbooked, break, and
-total time from Toggl Track. It uses the authenticated user's Toggl timezone and
-week settings and is read-only with respect to Toggl.
+total time from Toggl Track. It also provides an interactive, confirmation-gated
+entry-quality review. Reports use the authenticated user's Toggl timezone and
+week settings; normal reporting remains read-only with respect to Toggl.
 
 ## Development
 
@@ -45,6 +46,29 @@ toggl-cli report --day 2026-08-08 --week --include-summary
 
 `--debug` sends redacted diagnostics to stderr. Report Markdown is written to
 stdout, so it can be passed directly to another command.
+
+When `--include-summary` is enabled, the report also includes an activity-type
+breakdown. Configure the taxonomy and optional Jira checks in the existing
+TOML file:
+
+```toml
+[review]
+activity_types = ["reviewing", "supporting", "doing", "meeting"]
+jira_activity_types = ["reviewing", "supporting", "doing"]
+```
+
+The `review` command is always interactive and requires a TTY. It previews
+proposed activity-type, project, and Jira-reference corrections and writes
+only after explicit confirmation:
+
+```text
+toggl-cli review --day 2026-08-08
+```
+
+Review writes use Toggl's bulk JSON Patch endpoint and can partially succeed;
+the command reports per-entry failures and never claims rollback. Live writes
+remain disabled until the separately authorized disposable-entry qualification
+probe described in the review plan is completed.
 
 ## Live smoke verification
 

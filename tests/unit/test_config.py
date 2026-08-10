@@ -6,6 +6,7 @@ from keyring.errors import KeyringError
 from toggl_cli.config import (
     ConfigError,
     KeyringCredentialStore,
+    ReviewSettings,
     Settings,
     load_settings,
     save_settings,
@@ -89,3 +90,33 @@ def test_keyring_save_failures_become_config_errors(monkeypatch: pytest.MonkeyPa
 
     with pytest.raises(ConfigError, match="could not be saved"):
         KeyringCredentialStore().set("token")
+
+
+def test_review_settings_use_defaults_and_preserve_canonical_jira_order(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        '[review]\nactivity_types = ["Doing", "Reviewing"]\njira_activity_types = ["doing"]\n'
+    )
+
+    assert load_settings(config_path).review == ReviewSettings(("Doing", "Reviewing"), ("Doing",))
+
+
+@pytest.mark.parametrize(
+    "contents, message",
+    [
+        ('[review]\nactivity_types = ["Doing", "doing"]\n', "duplicates"),
+        ('[review]\nactivity_types = ["marker"]\n', "reserved"),
+        ("[review]\nactivity_types = []\n", "non-empty"),
+        ('[review]\nactivity_types = [" Doing"]\n', "surrounding whitespace"),
+        (
+            '[review]\nactivity_types = ["doing"]\njira_activity_types = ["meeting"]\n',
+            "outside activity_types",
+        ),
+    ],
+)
+def test_invalid_review_settings_are_rejected(tmp_path: Path, contents: str, message: str) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(contents)
+
+    with pytest.raises(ConfigError, match=message):
+        load_settings(config_path)

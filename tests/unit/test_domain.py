@@ -2,8 +2,10 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from toggl_cli.domain import (
+    ActivityTypeSummary,
     ReportingPeriod,
     TimeEntry,
+    calculate_activity_summary,
     calculate_summary,
     calculate_time_totals,
     format_duration,
@@ -193,5 +195,71 @@ def test_summary_uses_booked_entries_and_has_stable_rendering() -> None:
     )
 
 
+def test_activity_summary_rendering_is_separate_from_client_summary() -> None:
+    total = calculate_time_totals(
+        [entry(1, "2026-08-08T09:00:00+00:00", "2026-08-08T10:00:00+00:00", 60 * 60_000)],
+        REPORT_NOW,
+        UTC,
+    )
+    activity = calculate_activity_summary([], total, ("doing", "meeting"))
+
+    rendered = render_report(
+        ReportingPeriod(datetime(2026, 8, 8).date(), datetime(2026, 8, 8).date()),
+        total,
+        True,
+        (),
+        activity,
+    )
+
+    assert "# Activity Type Summary" in rendered
+    assert "* doing: 0.00% (00:00:00)" in rendered
+    assert "* meeting: 0.00% (00:00:00)" in rendered
+    assert "* Unclassified: 0.00% (00:00:00)" in rendered
+    assert "* Conflicting: 0.00% (00:00:00)" in rendered
+
+
 def test_format_duration_supports_more_than_a_day() -> None:
     assert format_duration(100 * 60 * 60 * 1000 + 2 * 60 * 1000 + 3 * 1000) == "100:02:03"
+
+
+def test_activity_summary_accounts_for_configured_unclassified_and_conflicting() -> None:
+    entries = [
+        entry(
+            1,
+            "2026-08-08T09:00:00+00:00",
+            "2026-08-08T10:00:00+00:00",
+            60 * 60_000,
+            tags=("DOING", "email"),
+        ),
+        entry(
+            2,
+            "2026-08-08T10:00:00+00:00",
+            "2026-08-08T10:30:00+00:00",
+            30 * 60_000,
+            tags=("supporting", "Doing"),
+        ),
+        entry(
+            3,
+            "2026-08-08T10:30:00+00:00",
+            "2026-08-08T11:00:00+00:00",
+            30 * 60_000,
+            tags=("email",),
+        ),
+        entry(
+            4,
+            "2026-08-08T11:00:00+00:00",
+            "2026-08-08T11:05:00+00:00",
+            5 * 60_000,
+            tags=("marker", "doing"),
+        ),
+    ]
+    total = calculate_time_totals(entries, REPORT_NOW, UTC)
+
+    result = calculate_activity_summary(entries, total, ("Doing", "Supporting"))
+
+    assert result == (
+        ActivityTypeSummary("Doing", 60 * 60_000, 50.0),
+        ActivityTypeSummary("Supporting", 0, 0.0),
+        ActivityTypeSummary("Unclassified", 30 * 60_000, 25.0),
+        ActivityTypeSummary("Conflicting", 30 * 60_000, 25.0),
+    )

@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta, tzinfo
 
 MARKER_TAG = "marker"
+DEFAULT_ACTIVITY_TYPES = ("reviewing", "supporting", "doing", "meeting")
 UNKNOWN_GROUP = "Unknown Client/Project"
 OVERLAP_WARNING_THRESHOLD = timedelta(minutes=5)
 
@@ -39,7 +40,7 @@ class TimeEntry:
 
     @property
     def is_marker(self) -> bool:
-        return MARKER_TAG in self.tags
+        return any(tag.casefold() == MARKER_TAG for tag in self.tags)
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,6 +58,13 @@ class SummaryGroup:
     booked_ms: int
     percentage: float
     children: tuple[SummaryGroup, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class ActivityTypeSummary:
+    name: str
+    booked_ms: int
+    percentage: float
 
 
 def format_duration(duration_ms: int) -> str:
@@ -178,3 +186,37 @@ def calculate_summary(
         )
     )
     return tuple(sorted(groups, key=lambda group: (-group.booked_ms, group.name)))
+
+
+def calculate_activity_summary(
+    entries: tuple[TimeEntry, ...] | list[TimeEntry],
+    total: TimeSummary,
+    activity_types: tuple[str, ...] = DEFAULT_ACTIVITY_TYPES,
+) -> tuple[ActivityTypeSummary, ...]:
+    """Group booked work by the configured, case-insensitive activity taxonomy."""
+
+    buckets = {name: 0 for name in activity_types}
+    buckets["Unclassified"] = 0
+    buckets["Conflicting"] = 0
+    by_key = {name.casefold(): name for name in activity_types}
+    for entry in entries:
+        if entry.is_marker:
+            continue
+        matching = {by_key[tag.casefold()] for tag in entry.tags if tag.casefold() in by_key}
+        bucket = (
+            next(iter(matching))
+            if len(matching) == 1
+            else ("Unclassified" if not matching else "Conflicting")
+        )
+        buckets[bucket] += entry.duration_ms
+
+    denominator = total.booked_ms
+    names = (*activity_types, "Unclassified", "Conflicting")
+    return tuple(
+        ActivityTypeSummary(
+            name=name,
+            booked_ms=buckets[name],
+            percentage=100 * buckets[name] / denominator if denominator > 0 else 0,
+        )
+        for name in names
+    )

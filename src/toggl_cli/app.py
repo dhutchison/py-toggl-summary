@@ -4,17 +4,28 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
+from time import monotonic, sleep
 from typing import Protocol
 
-from .api import Profile
+from .api import ApiError, Profile
 from .config import ConfigError, Settings
 from .domain import (
+    DEFAULT_ACTIVITY_TYPES,
+    ActivityTypeSummary,
     ReportingPeriod,
     SummaryGroup,
     TimeEntry,
     TimeSummary,
+    calculate_activity_summary,
     calculate_summary,
     calculate_time_totals,
+)
+from .review import (
+    PatchResult,
+    Project,
+    ReviewCandidate,
+    grouped_patches,
+    ordered_candidates,
 )
 
 
@@ -56,6 +67,23 @@ class ReportService:
         week: bool,
         include_summary: bool,
     ) -> tuple[ReportingPeriod, TimeSummary, tuple[SummaryGroup, ...]]:
+        period, total, summary, _ = self.run_with_entries(
+            selected_day, week, include_summary, DEFAULT_ACTIVITY_TYPES
+        )
+        return period, total, summary
+
+    def run_with_entries(
+        self,
+        selected_day: date | None,
+        week: bool,
+        include_summary: bool,
+        activity_types: tuple[str, ...] = DEFAULT_ACTIVITY_TYPES,
+    ) -> tuple[
+        ReportingPeriod,
+        TimeSummary,
+        tuple[SummaryGroup, ...],
+        tuple[ActivityTypeSummary, ...],
+    ]:
         report_now = self._clock()
         profile = self._api.get_profile()
         day = selected_day or report_now.astimezone(profile.timezone).date()
@@ -68,4 +96,169 @@ class ReportService:
         )
         total = calculate_time_totals(entries, report_now, profile.timezone)
         summary = calculate_summary(entries, total) if include_summary else ()
-        return period, total, summary
+        activity_summary = (
+            calculate_activity_summary(entries, total, activity_types) if include_summary else ()
+        )
+        return period, total, summary, activity_summary
+
+
+class ReviewApiPort(TogglApiPort, Protocol):
+    def get_active_projects(self, workspace_id: int) -> tuple[Project, ...]: ...
+
+    def bulk_patch(
+        self,
+        workspace_id: int,
+        entry_ids: tuple[int, ...],
+        operations: tuple[dict[str, object], ...],
+    ) -> PatchResult: ...
+
+
+class ReviewService:
+    def __init__(
+        self,
+        api: ReviewApiPort,
+        settings: Settings,
+        clock: Callable[[], datetime] | None = None,
+        sleep_fn: Callable[[float], None] = sleep,
+        monotonic_fn: Callable[[], float] = monotonic,
+    ) -> None:
+        self._api = api
+        self._settings = settings
+        self._clock = clock or (lambda: datetime.now(UTC))
+        self._sleep = sleep_fn
+        self._monotonic = monotonic_fn
+
+    def snapshot(
+        self, selected_day: date | None, week: bool
+    ) -> tuple[
+        ReportingPeriod,
+        Profile,
+        tuple[TimeEntry, ...],
+        tuple[ReviewCandidate, ...],
+        tuple[Project, ...],
+    ]:
+        report_now = self._clock()
+        profile = self._api.get_profile()
+        if profile.user_id is None:
+            raise ConfigError(
+                "Toggl did not provide the authenticated user ID; review is disabled."
+            )
+        day = selected_day or report_now.astimezone(profile.timezone).date()
+        period = reporting_period(day, week, profile.beginning_of_week)
+        workspace_id = self._settings.workspace_id or profile.default_workspace_id
+        if workspace_id is None:
+            raise ConfigError("No workspace is configured and Toggl has no default workspace.")
+        entries = self._api.get_detailed_entries(
+            workspace_id, period.start, period.end, report_now.astimezone(profile.timezone)
+        )
+        candidates = ordered_candidates(
+            entries,
+            profile.user_id,
+            self._settings.review.activity_types,
+            self._settings.review.jira_activity_types,
+        )
+        projects = (
+            self._api.get_active_projects(workspace_id)
+            if any("missing_project" in candidate.issues for candidate in candidates)
+            else ()
+        )
+        return period, profile, entries, candidates, projects
+
+    def submit(
+        self,
+        workspace_id: int,
+        candidates: tuple[ReviewCandidate, ...] | list[ReviewCandidate],
+        *,
+        minimum_interval: float = 1.0,
+        quota_remaining: int | None = None,
+    ) -> PatchResult:
+        """Submit grouped patches, pacing requests and retaining partial results."""
+
+        success: list[int] = []
+        failures: list[tuple[int, str]] = []
+        uncertain: list[int] = []
+        not_attempted: list[int] = []
+        attempts = retries = 0
+        last_request: float | None = None
+        planned = grouped_patches(candidates)
+        planned_ids = tuple(entry_id for group, _ in planned for entry_id in group)
+        if quota_remaining is None:
+            return PatchResult(not_attempted=planned_ids)
+        if quota_remaining < len(planned):
+            return PatchResult(
+                not_attempted=planned_ids,
+            )
+        for group_index, (entry_ids, operations) in enumerate(planned):
+            for attempt in range(3):
+                if last_request is not None:
+                    wait = minimum_interval - (self._monotonic() - last_request)
+                    if wait > 0:
+                        self._sleep(wait)
+                last_request = self._monotonic()
+                attempts += 1
+                try:
+                    result = self._api.bulk_patch(workspace_id, entry_ids, operations)
+                except ApiError as error:
+                    transient = error.status_code is None or error.status_code in {
+                        408,
+                        425,
+                        429,
+                        500,
+                        502,
+                        503,
+                        504,
+                    }
+                    if transient and attempt < 2:
+                        retries += 1
+                        retry_after = error.headers.get("retry-after")
+                        try:
+                            retry_wait = float(retry_after) if retry_after is not None else 0.0
+                        except ValueError:
+                            retry_wait = 0.0
+                        self._sleep(max(1.0, retry_wait, float(2**attempt)))
+                        continue
+                    reason = "uncertain outcome" if transient else str(error)
+                    if error.status_code in {401, 403}:
+                        not_attempted.extend(
+                            entry_id
+                            for later_group, _ in planned[group_index + 1 :]
+                            for entry_id in later_group
+                        )
+                        failures.extend((entry_id, reason) for entry_id in entry_ids)
+                        return PatchResult(
+                            tuple(success),
+                            tuple(failures),
+                            tuple(uncertain),
+                            tuple(not_attempted),
+                            attempts,
+                            retries,
+                        )
+                    if reason == "uncertain outcome":
+                        uncertain.extend(entry_ids)
+                        not_attempted.extend(
+                            entry_id
+                            for later_group, _ in planned[group_index + 1 :]
+                            for entry_id in later_group
+                        )
+                        return PatchResult(
+                            tuple(success),
+                            tuple(failures),
+                            tuple(uncertain),
+                            tuple(not_attempted),
+                            attempts,
+                            retries,
+                        )
+                    failures.extend((entry_id, reason) for entry_id in entry_ids)
+                    break
+                else:
+                    success.extend(result.success)
+                    failures.extend(result.failures)
+                    break
+        return PatchResult(
+            tuple(success),
+            tuple(failures),
+            tuple(uncertain),
+            tuple(not_attempted),
+            attempts,
+            retries,
+        )
