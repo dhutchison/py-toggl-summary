@@ -265,12 +265,20 @@ def test_bulk_patch_rejects_incomplete_per_id_response() -> None:
 
 
 def test_bulk_patch_is_disabled_until_manual_write_qualification() -> None:
-    api = TogglApi("secret-token", transport=httpx.MockTransport(lambda _: httpx.Response(500)))
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(500)
+
+    api = TogglApi("secret-token", transport=httpx.MockTransport(handler))
     try:
         with pytest.raises(ApiError, match="Live writes are disabled"):
             api.bulk_patch(42, (10,), ())
     finally:
         api.close()
+
+    assert calls == []
 
 
 def test_quota_adapter_uses_lowest_remaining_window() -> None:
