@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any
@@ -12,7 +12,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from .domain import TimeEntry
-from .review import PatchResult, Project
+from .review import Project
 
 TRACK_BASE_URL = "https://api.track.toggl.com"
 REPORTS_BASE_URL = "https://api.track.toggl.com"
@@ -90,6 +90,19 @@ class Profile:
 class Quota:
     remaining: int
     resets_in_seconds: int
+
+
+def _quota_from_headers(headers: Mapping[str, str]) -> Quota | None:
+    remaining = headers.get("x-toggl-quota-remaining")
+    if remaining is None:
+        return None
+    try:
+        return Quota(
+            remaining=int(remaining),
+            resets_in_seconds=int(headers.get("x-toggl-quota-resets-in", "0")),
+        )
+    except ValueError:
+        return None
 
 
 def _profile(value: ProfileDTO) -> Profile:
@@ -261,44 +274,28 @@ class TogglApi:
         except (KeyError, TypeError, ValueError, AttributeError) as error:
             raise ApiError("Toggl returned an invalid API quota response.") from error
 
-    def bulk_patch(
+    def put_time_entry(
         self,
         workspace_id: int,
-        entry_ids: tuple[int, ...],
-        operations: tuple[dict[str, object], ...],
-    ) -> PatchResult:
+        entry_id: int,
+        changes: dict[str, object],
+    ) -> Quota | None:
+        """Update one entry with its complete set of changed fields."""
+
         if not self.writes_qualified:
             raise ApiError(
                 "Live writes are disabled until the separately authorized Toggl probe is complete."
             )
-        if not entry_ids or len(entry_ids) > 100:
-            raise ValueError("Bulk patch requires between one and 100 entry IDs.")
+        if workspace_id <= 0 or entry_id <= 0:
+            raise ValueError("Workspace and time entry IDs must be positive.")
+        if not changes:
+            raise ValueError("At least one time entry field must change.")
         response = self._request(
-            "PATCH",
-            f"{self._track_base_url}/api/v9/workspaces/{workspace_id}/time_entries/"
-            + ",".join(str(entry_id) for entry_id in entry_ids),
-            json=list(operations),
+            "PUT",
+            f"{self._track_base_url}/api/v9/workspaces/{workspace_id}/time_entries/{entry_id}",
+            json=changes,
         )
-        try:
-            payload = response.json()
-            if not isinstance(payload, dict):
-                raise TypeError("response is not an object")
-            successes = tuple(int(value) for value in payload.get("success", []))
-            failures = tuple(
-                (int(item["id"]), str(item.get("message", "unknown failure"))[:240])
-                for item in payload.get("failure", [])
-            )
-            submitted = set(entry_ids)
-            returned = [*successes, *(entry_id for entry_id, _ in failures)]
-            if (
-                len(returned) != len(set(returned))
-                or set(returned) != submitted
-                or any(entry_id not in submitted for entry_id in returned)
-            ):
-                raise ValueError("bulk patch response did not cover submitted IDs")
-        except (KeyError, TypeError, ValueError, AttributeError) as error:
-            raise ApiError("Toggl returned an invalid bulk patch response.") from error
-        return PatchResult(success=successes, failures=failures)
+        return _quota_from_headers(response.headers)
 
     @staticmethod
     def _to_v2_entry(row: DetailedV2RowDTO, report_now: datetime) -> TimeEntry:

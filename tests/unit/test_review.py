@@ -14,7 +14,7 @@ from toggl_cli.review import (
     Project,
     add_jira_reference,
     candidate_for,
-    grouped_patches,
+    entry_changes,
     matching_prefix,
     ordered_candidates,
     replace_activity_type,
@@ -74,7 +74,7 @@ def test_prefix_matching_requires_unique_selection() -> None:
     assert resolve_unique_prefix("do", choices) is None
 
 
-def test_grouped_patches_keep_only_net_changes() -> None:
+def test_entry_changes_include_only_changed_fields() -> None:
     original = make_entry(1, tags=("email",), project_id=None)
     candidate = candidate_for(original, ("doing",))
     proposed = candidate.__class__(
@@ -84,9 +84,25 @@ def test_grouped_patches_keep_only_net_changes() -> None:
         candidate.original_issues,
     )
 
-    grouped = grouped_patches((proposed,))
+    changes = entry_changes(proposed.original, proposed.proposed)
 
-    assert grouped == (((1,), ({"op": "replace", "path": "/tags", "value": ["email", "doing"]},)),)
+    assert changes == {"tags": ["email", "doing"]}
+
+
+def test_entry_changes_coalesce_description_project_and_complete_tags() -> None:
+    original = make_entry(1, tags=("keep",), project_id=None, description="Existing")
+    proposed = replace(
+        original,
+        description="ABC-123 Existing",
+        project_id=42,
+        tags=("keep", "doing"),
+    )
+
+    assert entry_changes(original, proposed) == {
+        "description": "ABC-123 Existing",
+        "project_id": 42,
+        "tags": ["keep", "doing"],
+    }
 
 
 def test_jira_issue_is_applied_only_for_known_activity() -> None:
@@ -195,7 +211,7 @@ def test_review_summary_and_cancellation_are_explicit(monkeypatch: pytest.Monkey
     candidate = candidate_for(original, ("doing",))
     candidate = candidate.__class__(
         candidate.original,
-        replace(original, project_id=9),
+        replace(original, project_id=9, tags=("doing",)),
         candidate.issues,
         candidate.original_issues,
     )
@@ -207,6 +223,8 @@ def test_review_summary_and_cancellation_are_explicit(monkeypatch: pytest.Monkey
     )
     rendered = output.getvalue()
     assert "unresolved=1" in rendered
+    assert "2 field update(s), 1 per-entry PUT request(s)" in rendered
+    assert "complete tag array" in rendered
     assert "Write readiness: blocked" in rendered
     assert "plan issue 09" in rendered
     assert "Entry 1 — Prepare client proposal:" in rendered

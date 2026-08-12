@@ -65,9 +65,11 @@ only after explicit confirmation:
 toggl-cli review --day 2026-08-08
 ```
 
-Review writes use Toggl's bulk JSON Patch endpoint and can partially succeed;
-the command reports per-entry failures and never claims rollback. Live writes
-remain disabled until the separately authorized disposable-entry qualification
+Review writes use one Toggl PUT request per changed entry and can partially
+succeed; the command reports per-entry failures and never claims rollback.
+Tag changes send the complete desired tag array and do not use Toggl's
+unreliable tag-delete action. Live writes remain disabled until the separately
+authorized disposable-entry qualification
 probe described in the [live-write qualification runbook](docs/live-write-qualification.md)
 is completed. A successful probe does not automatically enable the normal
 write path.

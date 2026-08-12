@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import suppress
 from datetime import UTC, date, datetime, timedelta
 from time import monotonic, sleep
 from typing import Protocol
 
-from .api import ApiError, Profile
+from .api import ApiError, Profile, Quota
 from .config import ConfigError, Settings
 from .domain import (
     DEFAULT_ACTIVITY_TYPES,
@@ -21,10 +22,10 @@ from .domain import (
     calculate_time_totals,
 )
 from .review import (
-    PatchResult,
     Project,
     ReviewCandidate,
-    grouped_patches,
+    WriteResult,
+    changed_entries,
     ordered_candidates,
 )
 
@@ -105,12 +106,9 @@ class ReportService:
 class ReviewApiPort(TogglApiPort, Protocol):
     def get_active_projects(self, workspace_id: int) -> tuple[Project, ...]: ...
 
-    def bulk_patch(
-        self,
-        workspace_id: int,
-        entry_ids: tuple[int, ...],
-        operations: tuple[dict[str, object], ...],
-    ) -> PatchResult: ...
+    def put_time_entry(
+        self, workspace_id: int, entry_id: int, changes: dict[str, object]
+    ) -> Quota | None: ...
 
 
 class ReviewService:
@@ -171,8 +169,9 @@ class ReviewService:
         *,
         minimum_interval: float = 1.0,
         quota_remaining: int | None = None,
-    ) -> PatchResult:
-        """Submit grouped patches, pacing requests and retaining partial results."""
+        quota_resets_in_seconds: int | None = None,
+    ) -> WriteResult:
+        """Submit one PUT per changed entry, pacing requests and retaining partial results."""
 
         success: list[int] = []
         failures: list[tuple[int, str]] = []
@@ -180,16 +179,34 @@ class ReviewService:
         not_attempted: list[int] = []
         attempts = retries = 0
         last_request: float | None = None
-        planned = grouped_patches(candidates)
-        planned_ids = tuple(entry_id for group, _ in planned for entry_id in group)
+        planned = changed_entries(candidates)
+        planned_ids = tuple(entry_id for entry_id, _ in planned)
         if quota_remaining is None:
-            return PatchResult(not_attempted=planned_ids)
+            return WriteResult(not_attempted=planned_ids)
         if quota_remaining < len(planned):
-            return PatchResult(
+            return WriteResult(
                 not_attempted=planned_ids,
+                quota_remaining=quota_remaining,
+                quota_resets_in_seconds=quota_resets_in_seconds,
             )
-        for group_index, (entry_ids, operations) in enumerate(planned):
+        remaining = quota_remaining
+        resets_in_seconds = quota_resets_in_seconds
+        for entry_index, (entry_id, changes) in enumerate(planned):
             for attempt in range(3):
+                if remaining < 1:
+                    later_ids = tuple(
+                        later_entry_id for later_entry_id, _ in planned[entry_index + 1 :]
+                    )
+                    return WriteResult(
+                        success=tuple(success),
+                        failures=tuple(failures),
+                        uncertain=tuple(uncertain),
+                        not_attempted=(entry_id, *later_ids),
+                        attempts=attempts,
+                        retries=retries,
+                        quota_remaining=remaining,
+                        quota_resets_in_seconds=resets_in_seconds,
+                    )
                 if last_request is not None:
                     wait = minimum_interval - (self._monotonic() - last_request)
                     if wait > 0:
@@ -197,17 +214,40 @@ class ReviewService:
                 last_request = self._monotonic()
                 attempts += 1
                 try:
-                    result = self._api.bulk_patch(workspace_id, entry_ids, operations)
+                    observed_quota = self._api.put_time_entry(workspace_id, entry_id, changes)
+                    remaining = (
+                        observed_quota.remaining if observed_quota else max(0, remaining - 1)
+                    )
+                    if observed_quota:
+                        resets_in_seconds = observed_quota.resets_in_seconds
                 except ApiError as error:
-                    transient = error.status_code is None or error.status_code in {
-                        408,
-                        425,
-                        429,
-                        500,
-                        502,
-                        503,
-                        504,
-                    }
+                    observed_remaining = error.headers.get("x-toggl-quota-remaining")
+                    observed_resets = error.headers.get("x-toggl-quota-resets-in")
+                    try:
+                        remaining = (
+                            int(observed_remaining)
+                            if observed_remaining is not None
+                            else max(0, remaining - 1)
+                        )
+                    except ValueError:
+                        remaining = max(0, remaining - 1)
+                    if observed_resets is not None:
+                        with suppress(ValueError):
+                            resets_in_seconds = int(observed_resets)
+                    transient = remaining > 0 and (
+                        error.status_code is None
+                        or error.status_code
+                        in {
+                            408,
+                            425,
+                            500,
+                            502,
+                            503,
+                            504,
+                        }
+                    )
+                    if error.status_code == 429 and remaining > 0:
+                        transient = True
                     if transient and attempt < 2:
                         retries += 1
                         retry_after = error.headers.get("retry-after")
@@ -220,45 +260,46 @@ class ReviewService:
                     reason = "uncertain outcome" if transient else str(error)
                     if error.status_code in {401, 403}:
                         not_attempted.extend(
-                            entry_id
-                            for later_group, _ in planned[group_index + 1 :]
-                            for entry_id in later_group
+                            later_entry_id for later_entry_id, _ in planned[entry_index + 1 :]
                         )
-                        failures.extend((entry_id, reason) for entry_id in entry_ids)
-                        return PatchResult(
+                        failures.append((entry_id, reason))
+                        return WriteResult(
                             tuple(success),
                             tuple(failures),
                             tuple(uncertain),
                             tuple(not_attempted),
                             attempts,
                             retries,
+                            remaining,
+                            resets_in_seconds,
                         )
                     if reason == "uncertain outcome":
-                        uncertain.extend(entry_ids)
+                        uncertain.append(entry_id)
                         not_attempted.extend(
-                            entry_id
-                            for later_group, _ in planned[group_index + 1 :]
-                            for entry_id in later_group
+                            later_entry_id for later_entry_id, _ in planned[entry_index + 1 :]
                         )
-                        return PatchResult(
+                        return WriteResult(
                             tuple(success),
                             tuple(failures),
                             tuple(uncertain),
                             tuple(not_attempted),
                             attempts,
                             retries,
+                            remaining,
+                            resets_in_seconds,
                         )
-                    failures.extend((entry_id, reason) for entry_id in entry_ids)
+                    failures.append((entry_id, reason))
                     break
                 else:
-                    success.extend(result.success)
-                    failures.extend(result.failures)
+                    success.append(entry_id)
                     break
-        return PatchResult(
+        return WriteResult(
             tuple(success),
             tuple(failures),
             tuple(uncertain),
             tuple(not_attempted),
             attempts,
             retries,
+            remaining,
+            resets_in_seconds,
         )

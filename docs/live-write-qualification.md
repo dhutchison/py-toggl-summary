@@ -33,15 +33,15 @@ Do not enable debug diagnostics.
 
 The probe consists of exactly ten mutation/report requests:
 
-1. Replace `/description` on entry 1 with a unique sentinel.
-2. Replace `/project_id` on entry 2 with the target project.
-3. Replace `/tags` on entry 3 with its original tags plus the known tag.
-4. Replace `/tags` on entry 4 with its original tags plus a new tag.
+1. PUT `{"description": "<sentinel>"}` on entry 1.
+2. PUT `{"project_id": <target-project-id>}` on entry 2.
+3. PUT the complete original tag array plus the known tag on entry 3.
+4. PUT the complete original tag array plus a new tag on entry 4.
 5. Read the same narrow report once and compare every field in the snapshot.
-6. Restore entry 1.
-7. Restore entry 2.
-8. Restore entry 3.
-9. Restore entry 4.
+6. PUT entry 1's complete original changed-field values.
+7. PUT entry 2's complete original changed-field values.
+8. PUT entry 3's complete original tag array.
+9. PUT entry 4's complete original tag array.
 10. Read the report once more.
 
 Pace every request by at least one second. Do not retry, paginate, issue an
@@ -54,8 +54,10 @@ starting the probe. If local policy counts that preflight request in the
 budget, resolve that policy before running because the defined probe window is
 exactly ten requests.
 
-Review every response manually. Require HTTP 200, a complete per-ID result,
-and a recorded remaining/reset quota value. Before request `n`, the recorded
+Review every response manually. Require HTTP 200 and a recorded remaining/reset
+quota value. Each PUT must target exactly one entry and contain only the
+changed fields; a tag update must contain the complete desired tag array and
+must not use `tag_action: "delete"`. Before request `n`, the recorded
 remaining quota must cover the current request and all remaining requests; the
 first preflight must be at least 12, and after response `n` the header must be
 at least `10 - n`. A missing header or a value below that threshold stops the

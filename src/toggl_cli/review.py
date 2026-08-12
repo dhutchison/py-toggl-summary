@@ -6,7 +6,6 @@ deliberately performs no I/O and never mutates a source ``TimeEntry``.
 
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass, replace
 from datetime import UTC
@@ -63,13 +62,15 @@ class ReviewCandidate:
 
 
 @dataclass(frozen=True, slots=True)
-class PatchResult:
+class WriteResult:
     success: tuple[int, ...] = ()
     failures: tuple[tuple[int, str], ...] = ()
     uncertain: tuple[int, ...] = ()
     not_attempted: tuple[int, ...] = ()
     attempts: int = 0
     retries: int = 0
+    quota_remaining: int | None = None
+    quota_resets_in_seconds: int | None = None
 
 
 def _matches(entry: TimeEntry, activity_types: tuple[str, ...]) -> tuple[str, ...]:
@@ -192,15 +193,15 @@ def ordered_candidates(
     return tuple(candidate for candidate in candidates if candidate.issues)
 
 
-def patch_operations(original: TimeEntry, proposed: TimeEntry) -> tuple[dict[str, object], ...]:
-    operations: list[dict[str, object]] = []
+def entry_changes(original: TimeEntry, proposed: TimeEntry) -> dict[str, object]:
+    changes: dict[str, object] = {}
     if original.description != proposed.description:
-        operations.append({"op": "replace", "path": "/description", "value": proposed.description})
+        changes["description"] = proposed.description
     if original.project_id != proposed.project_id:
-        operations.append({"op": "replace", "path": "/project_id", "value": proposed.project_id})
+        changes["project_id"] = proposed.project_id
     if original.tags != proposed.tags:
-        operations.append({"op": "replace", "path": "/tags", "value": list(proposed.tags)})
-    return tuple(operations)
+        changes["tags"] = list(proposed.tags)
+    return changes
 
 
 def matching_prefix(query: str, choices: tuple[str, ...] | list[str]) -> tuple[str, ...]:
@@ -218,23 +219,14 @@ def resolve_unique_prefix(query: str, choices: tuple[str, ...] | list[str]) -> s
     return matches[0] if len(matches) == 1 else None
 
 
-def grouped_patches(
+def changed_entries(
     candidates: tuple[ReviewCandidate, ...] | list[ReviewCandidate],
-) -> tuple[tuple[tuple[int, ...], tuple[dict[str, object], ...]], ...]:
-    """Group identical patch lists and split each request at the API's 100-ID limit."""
+) -> tuple[tuple[int, dict[str, object]], ...]:
+    """Return one coalesced PUT body for each changed entry in review order."""
 
-    groups: dict[str, list[int]] = {}
-    operation_sets: dict[str, tuple[dict[str, object], ...]] = {}
+    result: list[tuple[int, dict[str, object]]] = []
     for candidate in candidates:
-        operations = patch_operations(candidate.original, candidate.proposed)
-        if not operations:
-            continue
-        key = json.dumps(operations, sort_keys=True)
-        groups.setdefault(key, []).append(candidate.original.id)
-        operation_sets[key] = operations
-    result: list[tuple[tuple[int, ...], tuple[dict[str, object], ...]]] = []
-    for key, ids in groups.items():
-        operations = operation_sets[key]
-        for offset in range(0, len(ids), 100):
-            result.append((tuple(ids[offset : offset + 100]), operations))
+        changes = entry_changes(candidate.original, candidate.proposed)
+        if changes:
+            result.append((candidate.original.id, changes))
     return tuple(result)

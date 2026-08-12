@@ -29,7 +29,7 @@ from .review import (
     Project,
     ReviewCandidate,
     add_jira_reference,
-    grouped_patches,
+    changed_entries,
     matching_prefix,
     propose,
     replace_activity_type,
@@ -201,13 +201,18 @@ def _render_review_summary(
         else sum(candidate.valid for candidate in candidates)
     )
     console.print(f"Review summary: valid={valid}, changed={changed}, unresolved={unresolved}")
-    patches = grouped_patches(candidates)
-    operation_count = sum(len(operations) for _, operations in patches)
+    writes = changed_entries(candidates)
+    operation_count = sum(len(changes) for _, changes in writes)
     console.print(
-        f"Write plan: {sum(len(ids) for ids, _ in patches)} entries, "
-        f"{operation_count} operations, {len(patches)} request(s), "
+        f"Write plan: {len(writes)} entries, "
+        f"{operation_count} field update(s), {len(writes)} per-entry PUT request(s), "
         "at least one second between requests; writes are partial and have no rollback."
     )
+    if any("tags" in changes for _, changes in writes):
+        console.print(
+            "Warning: tag updates replace the complete tag array; tags added after this "
+            "review snapshot may be overwritten."
+        )
     if writes_qualified:
         console.print("Write readiness: live writes are qualified.")
     else:
@@ -388,10 +393,11 @@ def review(  # pragma: no cover - interactive TTY boundary is covered by subproc
             )
             return
         quota = api.get_quota()
-        if quota.remaining < len(grouped_patches(reviewed)):
+        writes = changed_entries(reviewed)
+        if quota.remaining < len(writes):
             console.print(
                 f"Only {quota.remaining} API request(s) remain; the plan needs "
-                f"{len(grouped_patches(reviewed))}. No changes were written."
+                f"{len(writes)} per-entry PUT request(s). No changes were written."
             )
             return
         if not typer.confirm("Submit these changes?", default=False):
@@ -400,12 +406,23 @@ def review(  # pragma: no cover - interactive TTY boundary is covered by subproc
         workspace = effective_settings.workspace_id or profile.default_workspace_id
         if workspace is None:
             raise ConfigError("No workspace is configured and Toggl has no default workspace.")
-        result = service.submit(workspace, reviewed, quota_remaining=quota.remaining)
+        result = service.submit(
+            workspace,
+            reviewed,
+            quota_remaining=quota.remaining,
+            quota_resets_in_seconds=quota.resets_in_seconds,
+        )
         retry_label = "retry" if result.retries == 1 else "retries"
+        quota_label = (
+            f"; last known quota {result.quota_remaining}"
+            f" (resets in {result.quota_resets_in_seconds}s)"
+            if result.quota_remaining is not None and result.quota_resets_in_seconds is not None
+            else ""
+        )
         console.print(
             f"Submitted {len(result.success)} succeeded, {len(result.failures)} failed, "
             f"{len(result.uncertain)} uncertain, and {len(result.not_attempted)} not attempted "
-            f"after {result.attempts} request(s) ({result.retries} {retry_label})."
+            f"after {result.attempts} request(s) ({result.retries} {retry_label}){quota_label}."
         )
         for entry_id, message in result.failures:
             stderr.print(f"Warning: entry {entry_id}: {message}")

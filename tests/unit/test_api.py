@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 import httpx
 import pytest
 
-from toggl_cli.api import ApiError, TogglApi
+from toggl_cli.api import ApiError, Quota, TogglApi
 
 FIXTURE = Path(__file__).parents[1] / "fixtures" / "reports_v2_page.json"
 
@@ -204,7 +204,7 @@ def test_debug_diagnostics_include_safe_v2_pagination() -> None:
     assert any("pagination page=1" in message for message in messages)
 
 
-def test_review_adapter_loads_only_active_workspace_projects_and_bulk_patches() -> None:
+def test_review_adapter_loads_only_active_workspace_projects_and_puts_one_entry() -> None:
     requests: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -221,12 +221,20 @@ def test_review_adapter_loads_only_active_workspace_projects_and_bulk_patches() 
                     ]
                 },
             )
-        assert request.method == "PATCH"
-        assert request.url.path.endswith("/time_entries/10,11")
-        assert json.loads(request.content) == [
-            {"op": "replace", "path": "/description", "value": "ABC-1"}
-        ]
-        return httpx.Response(200, json={"success": [10], "failure": [{"id": 11, "message": "no"}]})
+        assert request.method == "PUT"
+        assert request.url.path.endswith("/time_entries/10")
+        assert json.loads(request.content) == {
+            "description": "ABC-1",
+            "tags": ["keep", "doing"],
+        }
+        return httpx.Response(
+            200,
+            headers={
+                "X-Toggl-Quota-Remaining": "7",
+                "X-Toggl-Quota-Resets-In": "60",
+            },
+            json={"id": 10},
+        )
 
     api = TogglApi(
         "secret-token",
@@ -235,36 +243,19 @@ def test_review_adapter_loads_only_active_workspace_projects_and_bulk_patches() 
     )
     try:
         projects = api.get_active_projects(42)
-        result = api.bulk_patch(
-            42,
-            (10, 11),
-            ({"op": "replace", "path": "/description", "value": "ABC-1"},),
-        )
+        quota = api.put_time_entry(42, 10, {"description": "ABC-1", "tags": ["keep", "doing"]})
     finally:
         api.close()
 
     assert [(project.id, project.name) for project in projects] == [(1, "Active")]
-    assert result.success == (10,)
-    assert result.failures == ((11, "no"),)
+    assert [request.url.path for request in requests] == [
+        "/api/v9/me/projects",
+        "/api/v9/workspaces/42/time_entries/10",
+    ]
+    assert quota == Quota(7, 60)
 
 
-def test_bulk_patch_rejects_incomplete_per_id_response() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"success": [10], "failure": []})
-
-    api = TogglApi(
-        "secret-token",
-        transport=httpx.MockTransport(handler),
-        writes_qualified=True,
-    )
-    try:
-        with pytest.raises(ApiError, match="invalid bulk patch response"):
-            api.bulk_patch(42, (10, 11), ())
-    finally:
-        api.close()
-
-
-def test_bulk_patch_is_disabled_until_manual_write_qualification() -> None:
+def test_put_time_entry_is_disabled_until_manual_write_qualification() -> None:
     calls: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -274,7 +265,7 @@ def test_bulk_patch_is_disabled_until_manual_write_qualification() -> None:
     api = TogglApi("secret-token", transport=httpx.MockTransport(handler))
     try:
         with pytest.raises(ApiError, match="Live writes are disabled"):
-            api.bulk_patch(42, (10,), ())
+            api.put_time_entry(42, 10, {"description": "new"})
     finally:
         api.close()
 
