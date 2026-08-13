@@ -293,3 +293,23 @@ def test_quota_adapter_uses_lowest_remaining_window() -> None:
 
     assert quota.remaining == 8
     assert quota.resets_in_seconds == 45
+
+
+def test_quota_adapter_accepts_top_level_list_response() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v9/me/quota"
+        return httpx.Response(
+            200,
+            json=[
+                {"remaining": 12, "resets_in_secs": 30},
+                {"remaining": 8, "resets_in_secs": 45},
+            ],
+        )
+
+    api = TogglApi("secret-token", transport=httpx.MockTransport(handler))
+    try:
+        quota = api.get_quota()
+    finally:
+        api.close()
+
+    assert quota == Quota(8, 45)

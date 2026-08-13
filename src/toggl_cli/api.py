@@ -257,7 +257,9 @@ class TogglApi:
         response = self._request("GET", f"{self._track_base_url}/api/v9/me/quota")
         try:
             payload = response.json()
-            items = payload["items"]
+            items = payload.get("items", payload) if isinstance(payload, dict) else payload
+            if not isinstance(items, list):
+                raise ValueError("quota items are not a list")
             quotas = [
                 item
                 for item in items

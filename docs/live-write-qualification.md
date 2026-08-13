@@ -1,12 +1,15 @@
 # Live-write qualification
 
-The review command is intentionally fail-closed. `TogglApi` defaults to
-`writes_qualified=False`, and this repository does not provide a runtime flag
-or environment variable that bypasses that boundary.
+`TogglApi` defaults to `writes_qualified=False`. The interactive review command
+explicitly opts into writes because the disposable per-entry PUT qualification
+probe has passed; other adapter callers remain fail-closed. This repository
+does not provide a runtime flag or environment variable that bypasses that
+boundary.
 
-Issue 09 requires a separate, human-authorized probe before live writes can be
-enabled. This is release evidence, not an automated test. Do not run it
-against production data, real work entries, or the normal `review` command.
+Issue 09 required a separate, human-authorized probe before live writes could
+be enabled. That probe passed on 2026-08-13. This is release evidence, not an
+automated test. Do not rerun it against production data, real work entries, or
+the normal `review` command unless requalification is needed.
 
 ## Preconditions
 
@@ -96,7 +99,6 @@ qualification: PASS or FAIL
 ```
 
 Do not store authorization headers, raw request/response bodies, raw IDs, or
-the original snapshot in the note. A PASS does not automatically enable the
-normal CLI; enabling that path requires a separate, code-reviewed change. If
-the probe fails or is interrupted, keep live writes disabled and preserve the
-disposable workspace for an operator to inspect.
+the original snapshot in the note. If a future API-contract change invalidates
+this evidence, or requalification fails, remove the review command's explicit
+opt-in and preserve the disposable workspace for an operator to inspect.

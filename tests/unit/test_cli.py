@@ -1,18 +1,22 @@
 from datetime import UTC, date, datetime
-from typing import Any
+from io import StringIO
+from typing import Any, ClassVar
 from zoneinfo import ZoneInfo
 
 from typer.testing import CliRunner
 
 from toggl_cli import cli
-from toggl_cli.api import Profile
+from toggl_cli.api import Profile, Quota
+from toggl_cli.config import Settings
 from toggl_cli.domain import TimeEntry
+from toggl_cli.review import Project
 
 
 class FakeApi:
-    def __init__(self, token: str, diagnostics: Any = None) -> None:
+    def __init__(self, token: str, diagnostics: Any = None, writes_qualified: bool = False) -> None:
         self.token = token
         self.diagnostics = diagnostics
+        self.writes_qualified = writes_qualified
 
     def get_profile(self) -> Profile:
         return Profile(ZoneInfo("UTC"), 1, 7)

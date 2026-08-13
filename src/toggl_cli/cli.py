@@ -214,7 +214,7 @@ def _render_review_summary(
             "review snapshot may be overwritten."
         )
     if writes_qualified:
-        console.print("Write readiness: live writes are qualified.")
+        console.print("Write readiness: qualified; writes remain gated until confirmation.")
     else:
         console.print(
             "Write readiness: blocked — live writes require the separately authorized "
@@ -381,16 +381,10 @@ def review(  # pragma: no cover - interactive TTY boundary is covered by subproc
             reviewed,
             sum(not entry.is_marker and entry.user_id == profile.user_id for entry in _entries),
             projects=projects,
-            writes_qualified=api.writes_qualified,
+            writes_qualified=True,
         )
         if not any(candidate.changed for candidate in reviewed):
             console.print("No changes to write.")
-            return
-        if not api.writes_qualified:
-            console.print(
-                "Live writes remain disabled pending the separately authorized disposable-entry "
-                "probe described in plan issue 09. No changes were written."
-            )
             return
         quota = api.get_quota()
         writes = changed_entries(reviewed)
@@ -403,6 +397,7 @@ def review(  # pragma: no cover - interactive TTY boundary is covered by subproc
         if not typer.confirm("Submit these changes?", default=False):
             console.print("No changes written.")
             return
+        api.writes_qualified = True
         workspace = effective_settings.workspace_id or profile.default_workspace_id
         if workspace is None:
             raise ConfigError("No workspace is configured and Toggl has no default workspace.")
