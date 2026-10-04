@@ -71,7 +71,10 @@ Tag changes send the complete desired tag array and do not use Toggl's
 unreliable tag-delete action. The separately authorized disposable-entry
 qualification probe described in the [live-write qualification runbook](docs/live-write-qualification.md)
 has passed, so the interactive review command enables the reviewed write path.
-Writes still require explicit confirmation and can partially succeed.
+Writes still require explicit confirmation and can partially succeed. The
+detailed [entry review contract](docs/entry-review-contract.md) describes the
+rules the command follows, and [ADR 0001](docs/adr/0001-per-entry-put-for-review-writes.md)
+records why review uses per-entry PUT requests.
 
 ## Live smoke verification
 
