@@ -58,6 +58,16 @@ class ReviewCancelled(Exception):
     pass
 
 
+def _format_countdown(total_seconds: int) -> str:
+    remaining = max(0, total_seconds)
+    hours, remaining = divmod(remaining, 60 * 60)
+    minutes, seconds = divmod(remaining, 60)
+    parts = [
+        f"{value}{unit}" for value, unit in ((hours, "h"), (minutes, "m"), (seconds, "s")) if value
+    ]
+    return " ".join(parts) or "0s"
+
+
 def _prompt(console: Console, prompt: str) -> str:
     try:
         value = input(prompt)
@@ -410,7 +420,7 @@ def review(  # pragma: no cover - interactive TTY boundary is covered by subproc
         retry_label = "retry" if result.retries == 1 else "retries"
         quota_label = (
             f"; last known quota {result.quota_remaining}"
-            f" (resets in {result.quota_resets_in_seconds}s)"
+            f" (resets in {_format_countdown(result.quota_resets_in_seconds)})"
             if result.quota_remaining is not None and result.quota_resets_in_seconds is not None
             else ""
         )

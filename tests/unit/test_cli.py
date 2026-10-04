@@ -12,6 +12,14 @@ from toggl_cli.domain import TimeEntry
 from toggl_cli.review import Project
 
 
+def test_format_countdown_uses_only_needed_time_units() -> None:
+    assert cli._format_countdown(0) == "0s"
+    assert cli._format_countdown(42) == "42s"
+    assert cli._format_countdown(125) == "2m 5s"
+    assert cli._format_countdown(3600) == "1h"
+    assert cli._format_countdown(3661) == "1h 1m 1s"
+
+
 class FakeApi:
     def __init__(self, token: str, diagnostics: Any = None, writes_qualified: bool = False) -> None:
         self.token = token
