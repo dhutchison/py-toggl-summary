@@ -48,6 +48,14 @@ def _rich_terminal_output_enabled() -> bool:
     )
 
 
+def _api_token(
+    explicit_token: str | None,
+    credentials: KeyringCredentialStore,
+) -> str | None:
+    """Resolve credentials in one-use, environment, then keyring order."""
+    return explicit_token or os.environ.get("TOGGL_API_TOKEN") or load_token(credentials)
+
+
 _rich_terminal_output = _rich_terminal_output_enabled()
 app = typer.Typer(
     help="Toggl reports and interactive entry review.",
@@ -306,10 +314,11 @@ def report(
             raise ConfigError("Workspace ID must be a positive integer.")
         effective_settings = replace(settings, workspace_id=selected_workspace)
         credentials = KeyringCredentialStore()
-        token = api_token or load_token(credentials)
+        token = _api_token(api_token, credentials)
         if not token:
             raise ConfigError(
-                "No API token is available. Provide --api-token or save one with --save-config."
+                "No API token is available. Provide --api-token, set TOGGL_API_TOKEN, "
+                "or save one with --save-config."
             )
         if save_config:
             if config_path.exists() and not typer.confirm(
@@ -386,10 +395,11 @@ def review(  # pragma: no cover - interactive TTY boundary is covered by subproc
             raise ConfigError("Workspace ID must be a positive integer.")
         effective_settings = replace(settings, workspace_id=selected_workspace)
         credentials = KeyringCredentialStore()
-        token = api_token or load_token(credentials)
+        token = _api_token(api_token, credentials)
         if not token:
             raise ConfigError(
-                "No API token is available. Provide --api-token or save one with --save-config."
+                "No API token is available. Provide --api-token, set TOGGL_API_TOKEN, "
+                "or save one with --save-config."
             )
         diagnostics = stderr.print if debug else None
         api = TogglApi(token, diagnostics=diagnostics)

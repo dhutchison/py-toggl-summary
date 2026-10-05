@@ -17,27 +17,30 @@ recommendation, not an implemented choice.
 The official Python SDK is a credible alternative when avoiding a separate `op`
 installation matters more than packaging and process-specific authorization.
 
-### Decision: document the existing interface
+### Project decision and follow-up
 
-On 2026-10-05, the project owner chose to keep this single-user project simple:
-retain the research and document `op run` with the existing `--api-token` option
-in the [README](../../README.md). No native provider, dependency, configuration
-contract, or credential-selection behavior is added. The implementation proposals
-below remain deferred options if this route is revisited.
+On 2026-10-05, the project owner first chose to keep this single-user project
+simple by documenting `op run` with `--api-token` only. After discussing the
+shell wrapper, the owner selected environment-variable support as the cleaner
+`op run` interface. The CLI now resolves credentials in this order:
+`--api-token`, `TOGGL_API_TOKEN`, then keyring. Both `report` and `review` use the
+same resolver; a higher-priority non-empty source skips lower-priority reads.
+The [README](../../README.md) documents `op run`, precedence, and the exposure
+tradeoff.
 
-`op run` resolves a reference into a child shell's environment, and that shell
-expands the token into `--api-token`. Single-quoting the child command delays
-expansion until after resolution. This works with the existing implementation;
-it needs neither a new environment-token source nor an `op read` adapter.
+This keeps the 1Password token out of CLI arguments: `op run` resolves the
+reference into `TOGGL_API_TOKEN` for the CLI process. The value is available in
+the process environment and may be visible to other processes running as the
+same user. Omitting `--save-config` leaves it out of keyring. No `op read`
+adapter, 1Password dependency, account/reference configuration, or dedicated
+1Password authentication behavior was added.
 [Run command reference](https://www.1password.dev/cli/reference/commands/run).
 
-The accepted tradeoff is that the resolved token exists in the child environment
-and process arguments. It stays out of the typed command and shell history when
-using the documented command without tracing, but output masking does not protect
-argv. Omit `--save-config` to avoid persisting the token in keyring. This workflow
-does not satisfy the original issue's proposed native integration requirement to
-keep the token out of process arguments; it is the owner's narrower documentation
-choice. The existing keyring workflow remains the default.
+The keyring workflow remains the default when neither `--api-token` nor the
+environment variable is set. The environment is a runtime source only; it is
+not persisted by configuration saving unless the user explicitly supplies
+`--save-config`, in which case the current behavior saves the selected token to
+keyring.
 
 | Option | Local interactive fit | Principal cost | Recommendation |
 | --- | --- | --- | --- |
@@ -46,7 +49,7 @@ choice. The existing keyring workflow remains the default.
 | `op read` + existing manual CLI session | Useful without desktop integration | Session environment, sign-in lifecycle, broader local security risks | Document as secondary authentication route |
 | Service account via CLI or SDK | Strong for unattended execution | Another secret to provision, restricted vaults and quotas | Future explicit automation mode |
 | Connect via CLI/REST/Connect SDK | Fits existing shared infrastructure | Operate servers and provision credentials/access token | Excessive for a single local token |
-| `op run` + child shell + existing `--api-token` | Works with current CLI | Resolved token in environment and argv | Selected documentation-only workflow |
+| `op run` + `TOGGL_API_TOKEN` | Works with CLI environment support | Resolved token in process environment | Selected workflow |
 
 ## 1. CLI with desktop authorization
 
@@ -254,11 +257,10 @@ built-in/default vaults listed in its prerequisites.
 Existing organizational Connect deployments could support the feature, but
 introducing that infrastructure for one local Toggl token has little advantage.
 
-`op run` can resolve a reference into a child process environment and mask output,
-but 1Password warns that other processes under the same user may access that
-environment. This CLI does not read a Toggl token environment variable directly;
-a child shell can pass it through the existing `--api-token` option as documented
-in the decision above. Output masking is not a
+`op run` resolves references into a child process environment. 1Password warns
+that other processes under the same user may access that environment. The CLI
+reads `TOGGL_API_TOKEN` directly after `--api-token` and before keyring, so a
+child shell and token argument are unnecessary. Output masking is not a
 replacement for application redaction. Shell substitution into `--api-token`
 would expose the resolved value in argv, even though the shell history contains
 only the substitution expression.
