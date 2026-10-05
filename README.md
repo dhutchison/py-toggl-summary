@@ -27,9 +27,11 @@ see the [development guide](DEVELOPMENT.md) for the workflow.
 
 ## Configuration
 
-The API token is stored in the operating system credential store under service
-`toggl-cli`, account `api-token`. Workspace settings are stored in the platform
-configuration directory in `config.json`, for example:
+The API token defaults to the operating system credential store under service
+`toggl-cli`, account `api-token`. For one invocation, credentials can instead
+come from `--api-token` or `TOGGL_API_TOKEN`, in that order before keyring.
+Workspace settings are stored in the platform configuration directory in
+`config.json`, for example:
 
 ```json
 {
@@ -40,11 +42,50 @@ configuration directory in `config.json`, for example:
 ```
 
 For a first run, pass `--api-token TOKEN --workspace-id ID --save-config`. The
-token is never written to the configuration file. A token can also be supplied
-for one invocation with `--api-token`; environment variables are intentionally
-not used for secrets.
+token is never written to the configuration file. `--api-token` is intended for
+one invocation; environment variables are useful for integrations such as
+1Password CLI's `op run`.
 Existing `config.toml` files are still read; saving settings writes the new
 `config.json` format and leaves the old file untouched.
+
+### Using 1Password with `op run`
+
+You can use 1Password CLI's `op run` without adding a token to the OS credential
+store. [Install and configure 1Password CLI](https://www.1password.dev/cli/get-started),
+then copy the secret reference for your Toggl API-token field from 1Password.
+
+On macOS/Linux with Bash, Zsh, or sh:
+
+```sh
+TOGGL_API_TOKEN='op://Private/Toggl/api token' \
+  op run --account ACCOUNT_ID -- toggl-cli report --workspace-id 123456
+```
+
+Replace the reference, `ACCOUNT_ID`, and workspace ID with your values. If running
+from a checkout, use `uv run toggl-cli` in place of `toggl-cli`. `op run` resolves
+the reference into `TOGGL_API_TOKEN` for the CLI. An explicit `--api-token`
+overrides the environment variable, which overrides keyring. Omit `--save-config`
+to avoid copying the resolved token into keyring.
+See the [1Password `op run` documentation](https://www.1password.dev/cli/reference/commands/run).
+
+In PowerShell:
+
+```powershell
+$Env:TOGGL_API_TOKEN = 'op://Private/Toggl/api token'
+op run --account ACCOUNT_ID -- toggl-cli report --workspace-id 123456
+Remove-Item Env:TOGGL_API_TOKEN
+```
+
+The token value stays out of the command arguments and shell history: only the
+1Password reference appears there. `op run` passes the resolved token through
+the child environment for the duration of the command. Other processes running
+as your user may be able to inspect process environments, so avoid using this
+for untrusted local processes. 1Password authorization prompts are separate
+from macOS Keychain access prompts.
+
+The [issue 21 research](docs/research/issue-21-1password-options.md) records the
+integration alternatives and the decision to use an environment variable with
+`op run` for this single-user project.
 
 ## Usage
 
