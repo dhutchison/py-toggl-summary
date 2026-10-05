@@ -344,9 +344,8 @@ def report(
         else:
             console = Console(
                 file=sys.stdout,
-                color_system="auto",
-                force_terminal=True,
                 markup=False,
+                highlight=False,
             )
             render_pretty_report(console, period, total, include_summary, summary, activity_summary)
         for warning in total.warnings:

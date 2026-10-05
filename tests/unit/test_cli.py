@@ -97,6 +97,7 @@ def test_pretty_format_renders_tables_with_include_summary(monkeypatch: Any) -> 
     )
 
     assert result.exit_code == 0
+    assert "\x1b[" not in result.stdout
     assert "Totals for 2026-08-08 to 2026-08-08" in result.stdout
     assert "Booked time" in result.stdout
     assert "Client / Project Summary" in result.stdout
