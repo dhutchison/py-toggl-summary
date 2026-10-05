@@ -41,10 +41,41 @@ configuration directory in `config.json`, for example:
 
 For a first run, pass `--api-token TOKEN --workspace-id ID --save-config`. The
 token is never written to the configuration file. A token can also be supplied
-for one invocation with `--api-token`; environment variables are intentionally
-not used for secrets.
+for one invocation with `--api-token`. The CLI does not read token values
+directly from environment variables.
 Existing `config.toml` files are still read; saving settings writes the new
 `config.json` format and leaves the old file untouched.
+
+### Using 1Password with `op run`
+
+You can use the existing `--api-token` option with 1Password CLI, without adding
+a token to the OS credential store. [Install and configure 1Password CLI](https://www.1password.dev/cli/get-started),
+then copy the secret reference for your Toggl API-token field from 1Password.
+
+On macOS/Linux with Bash, Zsh, or sh:
+
+```sh
+TOGGL_API_TOKEN='op://Private/Toggl/api token' \
+  op run --account ACCOUNT_ID -- sh -c \
+  'exec toggl-cli report --api-token "$TOGGL_API_TOKEN" --workspace-id 123456'
+```
+
+Replace the reference, `ACCOUNT_ID`, and workspace ID with your values. If running
+from a checkout, use `uv run toggl-cli` in place of `toggl-cli` inside the quoted
+command. `op run` resolves the reference into the child environment; the single
+quotes delay expansion until that child shell runs. The explicit token overrides
+keyring for this invocation. Omit `--save-config` to keep it out of keyring.
+See the [1Password `op run` documentation](https://www.1password.dev/cli/reference/commands/run).
+
+This keeps the token value out of the typed command, shell history, and settings
+file, but the resolved token is present in the child environment and CLI process
+arguments. Other local processes with sufficient access may be able to read it;
+1Password's output masking does not protect process arguments. Avoid shell tracing
+(`set -x`) when using this command. 1Password authorization prompts are separate
+from macOS Keychain access prompts.
+
+The [issue 21 research](docs/research/issue-21-1password-options.md) records the
+integration alternatives and the decision to use this documentation-only workflow.
 
 ## Usage
 
