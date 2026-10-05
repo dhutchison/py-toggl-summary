@@ -1,0 +1,69 @@
+[project]
+name = "toggl-cli"
+version = "0.1.0"
+description = "Toggl work-time reports and interactive entry review"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "keyring>=25,<26",
+  "platformdirs>=4,<5",
+  "pydantic>=2,<3",
+  "rich>=13,<15",
+  "typer>=0.15,<1",
+  "tzdata; sys_platform == 'win32'",
+]
+
+[project.scripts]
+toggl-cli = "toggl_cli.cli:main"
+
+[dependency-groups]
+dev = [
+  "commitizen>=4,<5",
+  "mypy>=1.13,<2",
+  "pre-commit>=4,<5",
+  "pytest>=8,<9",
+  "pytest-cov>=6,<7",
+  "ruff>=0.9,<1",
+]
+
+[build-system]
+requires = ["uv_build>=0.11,<0.12"]
+build-backend = "uv_build"
+
+[tool.commitizen]
+name = "cz_conventional_commits"
+version = "0.1.0"
+tag_format = "v$version"
+version_files = ["pyproject.toml:version"]
+
+[tool.pytest.ini_options]
+addopts = ["--strict-config", "--strict-markers"]
+markers = ["live: opt-in read-only Toggl API smoke tests"]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+branch = true
+source = ["toggl_cli"]
+omit = ["*/__main__.py"]
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 90
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+plugins = ["pydantic.mypy"]
+files = ["src", "tests"]
+
+[tool.pydantic-mypy]
+init_forbid_extra = true
+init_typed = true
+warn_required_dynamic_aliases = true
