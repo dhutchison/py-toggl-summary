@@ -6,6 +6,8 @@ import os
 import sys
 from dataclasses import replace
 from datetime import date, tzinfo
+from enum import StrEnum
+from typing import Annotated
 
 import typer
 from rich.console import Console
@@ -20,7 +22,7 @@ from .config import (
     load_token,
     save_settings,
 )
-from .render import render_report
+from .render import render_pretty_report, render_report, render_report_json
 from .review import (
     CONFLICTING_ACTIVITY_TYPE,
     MISSING_ACTIVITY_TYPE,
@@ -56,6 +58,12 @@ app = typer.Typer(
 
 class ReviewCancelled(Exception):
     pass
+
+
+class ReportFormat(StrEnum):
+    MARKDOWN = "markdown"
+    PRETTY = "pretty"
+    JSON = "json"
 
 
 def _format_countdown(total_seconds: int) -> str:
@@ -264,6 +272,14 @@ def report(
     include_summary: bool = typer.Option(
         False, "--include-summary", help="Include client/project grouping."
     ),
+    output_format: Annotated[
+        ReportFormat,
+        typer.Option(
+            "--format",
+            help="Report format: markdown, pretty (interactive terminal only), or json.",
+            case_sensitive=False,
+        ),
+    ] = ReportFormat.MARKDOWN,
     debug: bool = typer.Option(
         False, "--debug", "-D", help="Write redacted diagnostics to stderr."
     ),
@@ -278,6 +294,9 @@ def report(
     ),
 ) -> None:
     stderr = Console(stderr=True, no_color=True, markup=False)
+    if output_format is ReportFormat.PRETTY and not _rich_terminal_output_enabled():
+        stderr.print("Error: --format pretty requires an interactive terminal.")
+        raise typer.Exit(code=2)
     try:
         selected_day = date.fromisoformat(day) if day else None
         config_path = default_config_path()
@@ -313,9 +332,23 @@ def report(
             )
         finally:
             api.close()
-        typer.echo(
-            render_report(period, total, include_summary, summary, activity_summary), nl=False
-        )
+        if output_format is ReportFormat.MARKDOWN:
+            typer.echo(
+                render_report(period, total, include_summary, summary, activity_summary), nl=False
+            )
+        elif output_format is ReportFormat.JSON:
+            typer.echo(
+                render_report_json(period, total, include_summary, summary, activity_summary),
+                nl=False,
+            )
+        else:
+            console = Console(
+                file=sys.stdout,
+                color_system="auto",
+                force_terminal=True,
+                markup=False,
+            )
+            render_pretty_report(console, period, total, include_summary, summary, activity_summary)
         for warning in total.warnings:
             stderr.print(f"Warning: {warning}")
     except (ApiError, ConfigError, ValueError) as error:

@@ -1,5 +1,9 @@
+import json
 from datetime import datetime
+from io import StringIO
 from zoneinfo import ZoneInfo
+
+from rich.console import Console
 
 from toggl_cli.domain import (
     ActivityTypeSummary,
@@ -10,7 +14,7 @@ from toggl_cli.domain import (
     calculate_time_totals,
     format_duration,
 )
-from toggl_cli.render import render_report
+from toggl_cli.render import render_pretty_report, render_report, render_report_json
 
 UTC = ZoneInfo("UTC")
 REPORT_NOW = datetime(2026, 8, 8, 17, 0, tzinfo=UTC)
@@ -220,6 +224,72 @@ def test_activity_summary_rendering_is_separate_from_client_summary() -> None:
 
 def test_format_duration_supports_more_than_a_day() -> None:
     assert format_duration(100 * 60 * 60 * 1000 + 2 * 60 * 1000 + 3 * 1000) == "100:02:03"
+
+
+def test_json_report_has_millisecond_and_human_readable_durations_for_totals_and_summaries() -> (
+    None
+):
+    entries = [
+        entry(1, "2026-08-08T09:00:00+00:00", "2026-08-08T10:00:00+00:00", 60 * 60_000),
+        entry(2, "2026-08-08T11:00:00+00:00", "2026-08-08T11:30:00+00:00", 30 * 60_000),
+    ]
+    total = calculate_time_totals(entries, REPORT_NOW, UTC)
+    summary = calculate_summary(entries, total)
+    activities = calculate_activity_summary(entries, total)
+
+    result = json.loads(
+        render_report_json(
+            ReportingPeriod(datetime(2026, 8, 8).date(), datetime(2026, 8, 8).date()),
+            total,
+            True,
+            summary,
+            activities,
+        )
+    )
+
+    assert result["period"] == {"start": "2026-08-08", "end": "2026-08-08"}
+    assert result["totals"]["booked"] == {
+        "milliseconds": 90 * 60_000,
+        "human_readable": "01:30:00",
+    }
+    assert result["totals"]["unbooked"] == {
+        "milliseconds": 60 * 60_000,
+        "human_readable": "01:00:00",
+    }
+    client_group = result["summary"]["client_project"][0]
+    assert client_group["duration"] == {
+        "milliseconds": 90 * 60_000,
+        "human_readable": "01:30:00",
+    }
+    assert client_group["projects"][0]["duration"]["human_readable"] == "01:30:00"
+    assert result["summary"]["activity_types"][0]["duration"]["milliseconds"] == 0
+
+
+def test_pretty_report_renders_totals_and_both_optional_summaries() -> None:
+    entries = [
+        entry(1, "2026-08-08T09:00:00+00:00", "2026-08-08T10:00:00+00:00", 60 * 60_000),
+    ]
+    total = calculate_time_totals(entries, REPORT_NOW, UTC)
+    summary = calculate_summary(entries, total)
+    activities = calculate_activity_summary(entries, total)
+    output = StringIO()
+    console = Console(file=output, width=100, force_terminal=False, color_system=None)
+
+    render_pretty_report(
+        console,
+        ReportingPeriod(datetime(2026, 8, 8).date(), datetime(2026, 8, 8).date()),
+        total,
+        True,
+        summary,
+        activities,
+    )
+
+    rendered = output.getvalue()
+    assert "Totals for 2026-08-08 to 2026-08-08" in rendered
+    assert "Booked time" in rendered and "01:00:00" in rendered
+    assert "Client / Project Summary" in rendered
+    assert "Activity Type Summary" in rendered
+    assert "Unclassified" in rendered
 
 
 def test_activity_summary_accounts_for_configured_unclassified_and_conflicting() -> None:
