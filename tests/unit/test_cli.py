@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, date, datetime
 from io import StringIO
 from typing import Any, ClassVar
@@ -54,6 +55,53 @@ def test_report_writes_markdown_to_stdout_and_diagnostics_to_stderr(monkeypatch:
     assert result.exit_code == 0
     assert "# Totals for 2026-08-08 to 2026-08-08" in result.stdout
     assert "secret-token" not in result.output
+
+
+def test_report_json_format_writes_valid_json_to_stdout(monkeypatch: Any) -> None:
+    monkeypatch.setattr(cli, "TogglApi", FakeApi)
+    monkeypatch.setattr(cli, "load_token", lambda credentials: "secret-token")
+    result = CliRunner().invoke(cli.app, ["report", "--day", "2026-08-08", "--format", "json"])
+
+    assert result.exit_code == 0
+    assert result.stderr == ""
+    data = json.loads(result.stdout)
+    assert data["totals"]["booked"] == {
+        "milliseconds": 3_600_000,
+        "human_readable": "01:00:00",
+    }
+    assert data["summary"] is None
+
+
+def test_pretty_format_requires_interactive_terminal_before_loading_credentials(
+    monkeypatch: Any,
+) -> None:
+    monkeypatch.setattr(cli, "_rich_terminal_output_enabled", lambda: False)
+    monkeypatch.setattr(
+        cli,
+        "load_token",
+        lambda credentials: (_ for _ in ()).throw(AssertionError("credentials must not load")),
+    )
+    result = CliRunner().invoke(cli.app, ["report", "--format", "pretty"])
+
+    assert result.exit_code == 2
+    assert "--format pretty requires an interactive terminal" in result.output
+
+
+def test_pretty_format_renders_tables_with_include_summary(monkeypatch: Any) -> None:
+    monkeypatch.setattr(cli, "_rich_terminal_output_enabled", lambda: True)
+    monkeypatch.setattr(cli, "TogglApi", FakeApi)
+    monkeypatch.setattr(cli, "load_token", lambda credentials: "secret-token")
+    result = CliRunner().invoke(
+        cli.app,
+        ["report", "--day", "2026-08-08", "--format", "pretty", "--include-summary"],
+    )
+
+    assert result.exit_code == 0
+    assert "\x1b[" not in result.stdout
+    assert "Totals for 2026-08-08 to 2026-08-08" in result.stdout
+    assert "Booked time" in result.stdout
+    assert "Client / Project Summary" in result.stdout
+    assert "Activity Type Summary" in result.stdout
 
 
 def test_report_without_credentials_returns_nonzero(monkeypatch: Any) -> None:

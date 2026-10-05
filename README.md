@@ -22,6 +22,9 @@ Install the local commit hook once with `uv run pre-commit install --hook-type c
 Commit messages must use Conventional Commits; Commitizen can create one with
 `uv run cz commit`.
 
+All changes are developed on feature branches and submitted as pull requests;
+see the [development guide](DEVELOPMENT.md) for the workflow.
+
 ## Configuration
 
 The API token is stored in the operating system credential store under service
@@ -48,10 +51,19 @@ Existing `config.toml` files are still read; saving settings writes the new
 ```text
 toggl-cli report --day 2026-08-08
 toggl-cli report --day 2026-08-08 --week --include-summary
+toggl-cli report --day 2026-08-08 --format pretty
+toggl-cli report --day 2026-08-08 --format json --include-summary
 ```
 
 `--debug` sends redacted diagnostics to stderr. Report Markdown is written to
-stdout, so it can be passed directly to another command.
+stdout by default, so it can be passed directly to another command. Select
+`--format markdown`, `--format pretty`, or `--format json` to choose another
+output format. Pretty output uses terminal tables and requires an interactive
+terminal; it exits with an error if stdout or stderr is redirected or the
+command is running in CI. JSON writes a structured report to stdout. Each
+duration includes both `milliseconds` and `human_readable` fields; when
+`--include-summary` is enabled, JSON and pretty output include both the
+client/project and activity-type summaries.
 
 When `--include-summary` is enabled, the report also includes an activity-type
 breakdown. Configure the taxonomy and optional Jira checks in the same JSON file:
