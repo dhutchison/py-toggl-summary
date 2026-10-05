@@ -22,6 +22,9 @@ Install the local commit hook once with `uv run pre-commit install --hook-type c
 Commit messages must use Conventional Commits; Commitizen can create one with
 `uv run cz commit`.
 
+All changes are developed on feature branches and submitted as pull requests;
+see the [development guide](DEVELOPMENT.md) for the workflow.
+
 ## Configuration
 
 The API token is stored in the operating system credential store under service
