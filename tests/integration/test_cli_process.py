@@ -31,6 +31,7 @@ def test_module_help_uses_rich_format_in_a_tty(monkeypatch: pytest.MonkeyPatch) 
 
     for variable in ("CI", "GITHUB_ACTIONS", "FORCE_COLOR", "NO_COLOR"):
         monkeypatch.delenv(variable, raising=False)
+    monkeypatch.setenv("TERM", "xterm-256color")
 
     output = bytearray()
 
