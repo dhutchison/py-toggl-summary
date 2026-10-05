@@ -142,7 +142,7 @@ def test_review_enables_qualified_writes_only_after_confirmation(
     output = TTY()
     monkeypatch.setattr("sys.stdout", output)
     monkeypatch.setattr(cli, "TogglApi", ReviewApi)
-    monkeypatch.setattr(cli, "load_settings", lambda path: Settings())
+    monkeypatch.setattr(cli, "load_settings", lambda: Settings())
     monkeypatch.setattr(cli, "load_token", lambda credentials: "secret-token")
     answers = iter(("doing", "Project"))
     monkeypatch.setattr("builtins.input", lambda prompt: next(answers))

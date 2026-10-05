@@ -15,7 +15,7 @@ Toggl user, in chronological order. Entries that already meet every enabled
 rule are left alone. A running entry can be reviewed, but the command does not
 stop it or change its timer state.
 
-The activity taxonomy comes from `review.activity_types` in `config.toml`. If
+The activity taxonomy comes from `review.activity_types` in `config.json`. If
 it is absent, the defaults are `reviewing`, `supporting`, `doing`, and
 `meeting`. Configured types replace that list, keep their spelling and order,
 and match tags without regard to case. An entry needs exactly one configured

@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import base64
+import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Any
+from email.message import Message
+from typing import IO, Any, Protocol, cast
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-import httpx
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from .domain import TimeEntry
@@ -30,6 +35,45 @@ class ApiError(RuntimeError):
         super().__init__(message)
         self.status_code = status_code
         self.headers = headers or {}
+
+
+class _UrlResponse(Protocol):
+    @property
+    def status(self) -> int | None: ...
+
+    code: int
+    headers: Message
+
+    def read(self) -> bytes: ...
+
+    def close(self) -> None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class _Response:
+    status_code: int
+    headers: dict[str, str]
+    body: bytes
+
+    @property
+    def is_error(self) -> bool:
+        return self.status_code >= 400
+
+    def json(self) -> Any:
+        return json.loads(self.body)
+
+
+class _NoRedirectHandler(HTTPRedirectHandler):
+    def redirect_request(
+        self,
+        req: Request,
+        fp: IO[bytes],
+        code: int,
+        msg: str,
+        headers: Message,
+        newurl: str,
+    ) -> Request | None:
+        return None
 
 
 class ProfileDTO(BaseModel):
@@ -127,17 +171,24 @@ class TogglApi:
         self,
         token: str,
         *,
-        transport: httpx.BaseTransport | None = None,
+        transport: Callable[[Request], _UrlResponse] | None = None,
         track_base_url: str = TRACK_BASE_URL,
         reports_base_url: str = REPORTS_BASE_URL,
         diagnostics: Callable[[str], None] | None = None,
         writes_qualified: bool = False,
     ) -> None:
-        self._client = httpx.Client(
-            transport=transport,
-            auth=(token, "api_token"),
-            headers={"Accept": "application/json", "Content-Type": "application/json"},
-            timeout=httpx.Timeout(20.0),
+        self._transport: Callable[[Request], _UrlResponse]
+        if transport is None:
+            opener = build_opener(_NoRedirectHandler())
+
+            def open_request(request: Request) -> _UrlResponse:
+                return cast(_UrlResponse, opener.open(request, timeout=20.0))
+
+            self._transport = open_request
+        else:
+            self._transport = transport
+        self._authorization = "Basic " + base64.b64encode(f"{token}:api_token".encode()).decode(
+            "ascii"
         )
         self._track_base_url = track_base_url.rstrip("/")
         self._reports_base_url = reports_base_url.rstrip("/")
@@ -145,22 +196,56 @@ class TogglApi:
         self.writes_qualified = writes_qualified
 
     def close(self) -> None:
-        self._client.close()
+        """Keep the adapter's lifecycle API; urllib closes each response per request."""
 
-    def _request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
+    def _request(
+        self,
+        method: str,
+        url: str,
+        *,
+        params: Mapping[str, str | int] | None = None,
+        json_body: Any = None,
+    ) -> _Response:
+        if params:
+            separator = "&" if "?" in url else "?"
+            url = f"{url}{separator}{urlencode(params)}"
+        body = None if json_body is None else json.dumps(json_body).encode("utf-8")
+        request = Request(
+            url,
+            data=body,
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "Authorization": self._authorization,
+            },
+            method=method,
+        )
         if self._diagnostics:
             self._diagnostics(f"{method} {url}")
         try:
-            response = self._client.request(method, url, **kwargs)
-        except httpx.HTTPError as error:
+            raw_response = self._transport(request)
+        except HTTPError as error:
+            raw_response = error
+        except (URLError, TimeoutError, OSError) as error:
             raise ApiError(f"Toggl request failed: {error.__class__.__name__}.") from error
+        try:
+            response_headers = {key.lower(): value for key, value in raw_response.headers.items()}
+            status_code = raw_response.status
+            if status_code is None:
+                status_code = raw_response.code
+            response = _Response(
+                status_code=status_code,
+                headers=response_headers,
+                body=raw_response.read(),
+            )
+        finally:
+            raw_response.close()
         if response.is_error:
             message = f"Toggl request failed with HTTP {response.status_code}."
             quota_headers = {
                 key: value
                 for key, value in response.headers.items()
-                if key.lower()
-                in {"x-toggl-quota-remaining", "x-toggl-quota-resets-in", "retry-after"}
+                if key in {"x-toggl-quota-remaining", "x-toggl-quota-resets-in", "retry-after"}
             }
             try:
                 body = response.json()
@@ -295,7 +380,7 @@ class TogglApi:
         response = self._request(
             "PUT",
             f"{self._track_base_url}/api/v9/workspaces/{workspace_id}/time_entries/{entry_id}",
-            json=changes,
+            json_body=changes,
         )
         return _quota_from_headers(response.headers)
 

@@ -281,7 +281,7 @@ def report(
     try:
         selected_day = date.fromisoformat(day) if day else None
         config_path = default_config_path()
-        settings = load_settings(config_path)
+        settings = load_settings()
         selected_workspace = workspace_id if workspace_id is not None else settings.workspace_id
         if selected_workspace is not None and selected_workspace <= 0:
             raise ConfigError("Workspace ID must be a positive integer.")
@@ -348,7 +348,7 @@ def review(  # pragma: no cover - interactive TTY boundary is covered by subproc
     api: TogglApi | None = None
     try:
         selected_day = date.fromisoformat(day) if day else None
-        settings = load_settings(default_config_path())
+        settings = load_settings()
         selected_workspace = workspace_id if workspace_id is not None else settings.workspace_id
         if selected_workspace is not None and selected_workspace <= 0:
             raise ConfigError("Workspace ID must be a positive integer.")

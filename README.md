@@ -26,16 +26,22 @@ Commit messages must use Conventional Commits; Commitizen can create one with
 
 The API token is stored in the operating system credential store under service
 `toggl-cli`, account `api-token`. Workspace settings are stored in the platform
-configuration directory in `config.toml`, for example:
+configuration directory in `config.json`, for example:
 
-```toml
-[toggl]
-workspace_id = 123456
+```json
+{
+  "toggl": {
+    "workspace_id": 123456
+  }
+}
 ```
 
 For a first run, pass `--api-token TOKEN --workspace-id ID --save-config`. The
-token is never written to TOML. A token can also be supplied for one invocation
-with `--api-token`; environment variables are intentionally not used for secrets.
+token is never written to the configuration file. A token can also be supplied
+for one invocation with `--api-token`; environment variables are intentionally
+not used for secrets.
+Existing `config.toml` files are still read; saving settings writes the new
+`config.json` format and leaves the old file untouched.
 
 ## Usage
 
@@ -48,13 +54,15 @@ toggl-cli report --day 2026-08-08 --week --include-summary
 stdout, so it can be passed directly to another command.
 
 When `--include-summary` is enabled, the report also includes an activity-type
-breakdown. Configure the taxonomy and optional Jira checks in the existing
-TOML file:
+breakdown. Configure the taxonomy and optional Jira checks in the same JSON file:
 
-```toml
-[review]
-activity_types = ["reviewing", "supporting", "doing", "meeting"]
-jira_activity_types = ["reviewing", "supporting", "doing"]
+```json
+{
+  "review": {
+    "activity_types": ["reviewing", "supporting", "doing", "meeting"],
+    "jira_activity_types": ["reviewing", "supporting", "doing"]
+  }
+}
 ```
 
 The `review` command is always interactive and requires a TTY. It previews

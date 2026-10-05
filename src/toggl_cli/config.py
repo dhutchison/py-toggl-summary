@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
+import json
 import os
 import stat
 import tomllib
 from copy import deepcopy
 from dataclasses import dataclass, field
+from datetime import date, datetime, time
 from pathlib import Path
 from typing import Any, Protocol
 
 import keyring
-import tomli_w
 from keyring.errors import KeyringError
 from platformdirs import user_config_path
 
@@ -73,8 +74,14 @@ def _without_secrets(value: Any) -> Any:
     return value
 
 
+def _json_default(value: Any) -> str:
+    if isinstance(value, (date, datetime, time)):
+        return value.isoformat()
+    raise TypeError(f"Unsupported configuration value: {type(value).__name__}")
+
+
 def default_config_path() -> Path:
-    return Path(user_config_path("toggl-cli", appauthor=False)) / "config.toml"
+    return Path(user_config_path("toggl-cli", appauthor=False)) / "config.json"
 
 
 def _validated_string_list(
@@ -137,15 +144,27 @@ def _review_settings(raw: dict[str, Any], path: Path) -> ReviewSettings:
 
 def load_settings(path: Path | None = None) -> Settings:
     config_path = path or default_config_path()
+    if path is None and not config_path.exists():
+        legacy_path = config_path.with_name("config.toml")
+        if legacy_path.exists():
+            config_path = legacy_path
     if not config_path.exists():
         return Settings()
     try:
-        with config_path.open("rb") as config_file:
-            raw = tomllib.load(config_file)
+        if config_path.suffix.lower() == ".toml":
+            with config_path.open("rb") as config_file:
+                raw = tomllib.load(config_file)
+        else:
+            with config_path.open(encoding="utf-8") as config_file:
+                raw = json.load(config_file)
+        if not isinstance(raw, dict):
+            raise ConfigError(f"Configuration must contain an object: {config_path}")
         toggl = raw.get("toggl", {})
+        if not isinstance(toggl, dict):
+            raise ConfigError(f"{config_path}: toggl must be an object.")
         workspace = toggl.get("workspace_id")
         if workspace is not None and (not isinstance(workspace, int) or workspace <= 0):
-            raise ConfigError("config.toml contains an invalid toggl.workspace_id.")
+            raise ConfigError(f"{config_path} contains an invalid toggl.workspace_id.")
         return Settings(
             workspace_id=workspace,
             review=_review_settings(raw, config_path),
@@ -153,7 +172,7 @@ def load_settings(path: Path | None = None) -> Settings:
         )
     except ConfigError:
         raise
-    except (OSError, tomllib.TOMLDecodeError, AttributeError) as error:
+    except (OSError, json.JSONDecodeError, tomllib.TOMLDecodeError, AttributeError) as error:
         raise ConfigError(f"Could not read configuration: {config_path}") from error
 
 
@@ -170,7 +189,7 @@ def save_settings(
     config_path = path or default_config_path()
     try:
         config_path.parent.mkdir(parents=True, exist_ok=True)
-        temporary_path = config_path.with_suffix(".toml.tmp")
+        temporary_path = config_path.with_suffix(".json.tmp")
         raw_config = _without_secrets(deepcopy(settings.raw_config))
         toggl_settings = dict(raw_config.get("toggl", {}))
         if settings.workspace_id is not None:
@@ -183,10 +202,13 @@ def save_settings(
             review_settings["activity_types"] = list(settings.review.activity_types)
             review_settings["jira_activity_types"] = list(settings.review.jira_activity_types)
             raw_config["review"] = review_settings
-        temporary_path.write_text(tomli_w.dumps(raw_config), encoding="utf-8")
+        temporary_path.write_text(
+            json.dumps(raw_config, indent=2, ensure_ascii=False, default=_json_default) + "\n",
+            encoding="utf-8",
+        )
         os.chmod(temporary_path, stat.S_IRUSR | stat.S_IWUSR)
         temporary_path.replace(config_path)
-    except OSError as error:
+    except (OSError, TypeError, ValueError) as error:
         raise ConfigError(f"Could not save configuration: {config_path}") from error
 
 
