@@ -267,6 +267,31 @@ def test_jira_only_correction_preserves_already_valid_classifications(
     assert entry_changes(entry, reviewed[0].proposed) == {"description": "ABC-1 Work"}
 
 
+def test_single_entry_group_does_not_label_existing_activity_as_inferred(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from toggl_cli.cli import _review_group
+
+    entry = make_entry(1, tags=("meeting",), project_id=None, description="Work")
+    entries = (entry,)
+    candidates = ordered_candidates(entries, 7, ("meeting",))
+    group = review_groups(entries, candidates, 7)[0]
+    output = StringIO()
+    monkeypatch.setattr("builtins.input", lambda prompt: "Client")
+
+    _review_group(
+        Console(file=output, no_color=True),
+        group,
+        ("meeting",),
+        (),
+        (Project(9, "Client"),),
+        UTC,
+    )
+
+    assert "activity=meeting" in output.getvalue()
+    assert "Inferred shared activity type" not in output.getvalue()
+
+
 def test_entry_changes_include_only_changed_fields() -> None:
     original = make_entry(1, tags=("email",), project_id=None)
     candidate = candidate_for(original, ("doing",))
