@@ -24,18 +24,21 @@ from .config import (
 )
 from .render import render_pretty_report, render_report, render_report_json
 from .review import (
-    CONFLICTING_ACTIVITY_TYPE,
-    MISSING_ACTIVITY_TYPE,
     MISSING_JIRA_REFERENCE,
-    MISSING_PROJECT,
     Project,
     ReviewCandidate,
+    ReviewGroup,
+    activity_issue,
     add_jira_reference,
     changed_entries,
+    effective_activity_type,
     matching_prefix,
+    normalize_description,
     propose,
     replace_activity_type,
     replace_project,
+    review_groups,
+    review_state,
 )
 
 
@@ -95,8 +98,8 @@ def _prompt(console: Console, prompt: str) -> str:
 
 
 def _entry_prompt_label(candidate: ReviewCandidate) -> str:
-    description = candidate.proposed.description or "(no description)"
-    return f"Entry {candidate.original.id} — {description}"
+    description = " ".join(candidate.proposed.description.split()) or "(no description)"
+    return f"{description} — entry {candidate.original.id}"
 
 
 def _project_label(project_id: int | None, projects: tuple[Project, ...]) -> str:
@@ -107,10 +110,14 @@ def _project_label(project_id: int | None, projects: tuple[Project, ...]) -> str
 
 
 def _choose_activity(
-    console: Console, candidate: ReviewCandidate, activity_types: tuple[str, ...]
+    console: Console,
+    candidate: ReviewCandidate,
+    activity_types: tuple[str, ...],
+    prompt_label: str | None = None,
 ) -> str | None:
     while True:
-        value = _prompt(console, f"{_entry_prompt_label(candidate)} activity type (s to skip): ")
+        label = prompt_label or _entry_prompt_label(candidate)
+        value = _prompt(console, f"{label} activity type (s to skip): ")
         if value.casefold() == "s":
             return None
         matches = matching_prefix(value, activity_types)
@@ -123,93 +130,168 @@ def _choose_activity(
 
 
 def _choose_project(
-    console: Console, candidate: ReviewCandidate, projects: tuple[Project, ...]
+    console: Console,
+    candidate: ReviewCandidate,
+    projects: tuple[Project, ...],
+    prompt_label: str | None = None,
 ) -> Project | None:
-    if not projects:
-        console.print(f"{_entry_prompt_label(candidate)}: no active projects are available.")
+    label = prompt_label or _entry_prompt_label(candidate)
+    active_projects = tuple(project for project in projects if project.active)
+    if not active_projects:
+        console.print(f"{label}: no active projects are available.")
         return None
-    choices = tuple(project.name for project in projects)
+    choices = tuple(project.name for project in active_projects)
     while True:
-        value = _prompt(console, f"{_entry_prompt_label(candidate)} project (s to skip): ")
+        value = _prompt(console, f"{label} project (s to skip): ")
         if value.casefold() == "s":
             return None
         matches = matching_prefix(value, choices)
         if len(matches) == 1:
-            return next(project for project in projects if project.name == matches[0])
+            return next(project for project in active_projects if project.name == matches[0])
         if matches:
             console.print("Ambiguous choice: " + ", ".join(matches))
         else:
             console.print("Choose an active project by name or unique prefix.")
 
 
-def _review_candidate(
+def _review_group(
     console: Console,
-    candidate: ReviewCandidate,
+    group: ReviewGroup,
     activity_types: tuple[str, ...],
     jira_activity_types: tuple[str, ...],
     projects: tuple[Project, ...],
-    display_timezone: tzinfo | None = None,
-) -> ReviewCandidate:
-    current = candidate
-    start = (
-        current.original.start.astimezone(display_timezone)
-        if display_timezone
-        else current.original.start
+    display_timezone: tzinfo,
+) -> tuple[ReviewCandidate, ...]:
+    """Resolve shared group fields once, then apply them to flagged entries only."""
+
+    representative = group.candidates[0]
+    description = (
+        group.description if normalize_description(group.description) else "(no description)"
     )
-    stop = (
-        current.original.stop.astimezone(display_timezone)
-        if display_timezone and current.original.stop
-        else current.original.stop
+    description = " ".join(description.split())
+    entry_ids = ", ".join(str(entry.id) for entry in group.members)
+    label = f"{description} — entries {entry_ids}"
+    console.print(label)
+    active_projects = {project.id: project for project in projects if project.active}
+    fully_valid = tuple(
+        entry
+        for entry in group.members
+        if not review_state(entry, activity_types, jira_activity_types).issues
     )
-    state = "running" if stop is None else stop.isoformat()
-    console.print(f"{_entry_prompt_label(current)}: {start.isoformat()} - {state}")
-    for issue in (
-        MISSING_ACTIVITY_TYPE,
-        CONFLICTING_ACTIVITY_TYPE,
-        MISSING_PROJECT,
-        MISSING_JIRA_REFERENCE,
-    ):
-        if issue not in current.issues:
-            continue
-        if issue in {MISSING_ACTIVITY_TYPE, CONFLICTING_ACTIVITY_TYPE}:
-            activity = _choose_activity(console, current, activity_types)
-            if activity is not None:
-                current = propose(
-                    current,
-                    replace_activity_type(current.proposed, activity, activity_types),
-                    activity_types,
-                    jira_activity_types,
-                )
-        elif issue == MISSING_PROJECT:
-            project = _choose_project(console, current, projects)
-            if project is not None:
-                current = propose(
-                    current,
-                    replace_project(current.proposed, project),
-                    activity_types,
-                    jira_activity_types,
-                )
-        else:
-            while True:
-                value = _prompt(
-                    console,
-                    f"{_entry_prompt_label(current)} Jira key (s to skip): ",
-                )
-                if value.casefold() == "s":
-                    break
-                try:
-                    proposed = add_jira_reference(current.proposed, value)
-                except ValueError as error:
-                    console.print(str(error))
-                    continue
-                current = propose(
-                    current,
-                    proposed,
-                    activity_types,
-                    jira_activity_types,
-                )
+    sources = fully_valid or group.members
+
+    for entry in group.members:
+        start = entry.start.astimezone(display_timezone)
+        stop = entry.stop.astimezone(display_timezone) if entry.stop else None
+        entry_status = "reference" if entry in fully_valid else "needs changes"
+        existing_activity = effective_activity_type(entry, activity_types) or "(unclassified)"
+        existing_project = _project_label(entry.project_id, projects)
+        console.print(
+            f"  Entry {entry.id} ({entry_status}): {start.isoformat()} - "
+            f"{stop.isoformat() if stop else 'running'}; "
+            f"project={existing_project}; activity={existing_activity}"
+        )
+
+    def shared_activity() -> tuple[str | None, bool]:
+        values = [
+            value
+            for entry in sources
+            if (value := effective_activity_type(entry, activity_types)) is not None
+        ]
+        distinct = {value.casefold(): value for value in values}
+        conflict = len(distinct) > 1
+        return (next(iter(distinct.values())) if len(distinct) == 1 else None, conflict)
+
+    def shared_project() -> tuple[Project | None, bool, bool]:
+        unavailable_reference = any(
+            entry.project_id not in active_projects for entry in fully_valid
+        )
+        values = [
+            active_projects[entry.project_id]
+            for entry in sources
+            if entry.project_id in active_projects
+        ]
+        distinct = {project.id: project for project in values}
+        conflict = len(distinct) > 1
+        if unavailable_reference:
+            return None, conflict, True
+        return (next(iter(distinct.values())) if len(distinct) == 1 else None, conflict, False)
+
+    activity, activity_conflict = shared_activity()
+    project, project_conflict, project_forced_prompt = shared_project()
+    activity_needs_prompt = activity is None or activity_conflict
+    project_needs_prompt = project is None or project_conflict or project_forced_prompt
+    activity_already_shared = activity is not None and all(
+        effective_activity_type(entry, activity_types) == activity for entry in group.members
+    )
+    project_already_shared = project is not None and all(
+        entry.project_id == project.id for entry in group.members
+    )
+    if activity is not None and not activity_needs_prompt and not activity_already_shared:
+        console.print(f"  Inferred shared activity type: {activity}")
+    if project is not None and not project_needs_prompt and not project_already_shared:
+        console.print(f"  Inferred shared project: {project.name} ({project.id})")
+
+    current = {candidate.original.id: candidate for candidate in group.candidates}
+    selected_activity = activity
+    if activity_needs_prompt:
+        selected_activity = _choose_activity(
+            console, representative, activity_types, prompt_label=label
+        )
+    selected_project = project
+    if project_needs_prompt:
+        selected_project = _choose_project(console, representative, projects, prompt_label=label)
+
+    for candidate in group.candidates:
+        proposed = candidate.proposed
+        if selected_activity is not None:
+            current_activity = effective_activity_type(proposed, activity_types)
+            if (
+                activity_issue(proposed, activity_types) is not None
+                or current_activity != selected_activity
+            ):
+                proposed = replace_activity_type(proposed, selected_activity, activity_types)
+        if selected_project is not None and proposed.project_id != selected_project.id:
+            proposed = replace_project(proposed, selected_project)
+        current[candidate.original.id] = propose(
+            candidate, proposed, activity_types, jira_activity_types
+        )
+
+    jira_targets = tuple(
+        entry_id
+        for entry_id, candidate in current.items()
+        if MISSING_JIRA_REFERENCE in candidate.issues
+    )
+    if jira_targets:
+        while True:
+            value = _prompt(console, f"{label} Jira key (s to skip): ")
+            if value.casefold() == "s":
                 break
-    return current
+            try:
+                for entry_id in jira_targets:
+                    candidate = current[entry_id]
+                    current[entry_id] = propose(
+                        candidate,
+                        add_jira_reference(candidate.proposed, value),
+                        activity_types,
+                        jira_activity_types,
+                    )
+            except ValueError as error:
+                console.print(str(error))
+                continue
+            break
+
+    disagreement_source = "references" if fully_valid else "entries"
+    if activity_conflict and (selected_activity is None or fully_valid):
+        console.print(f"  Group warning: matching {disagreement_source} disagree on activity type.")
+    if project_conflict and (selected_project is None or fully_valid):
+        console.print(f"  Group warning: matching {disagreement_source} disagree on project.")
+    if project_forced_prompt:
+        console.print(
+            "  Group warning: a reference project is unavailable in active choices; "
+            "reference entries remain unchanged."
+        )
+    return tuple(current[candidate.original.id] for candidate in group.candidates)
 
 
 def _render_review_summary(
@@ -417,16 +499,23 @@ def review(  # pragma: no cover - interactive TTY boundary is covered by subproc
         if not candidates:
             console.print(f"No entries need review for {period.start} to {period.end}.")
             return
+        authenticated_user_id = profile.user_id
+        if authenticated_user_id is None:
+            raise ConfigError(
+                "Toggl did not provide the authenticated user ID; review is disabled."
+            )
+        groups = review_groups(_entries, candidates, authenticated_user_id)
         reviewed = tuple(
-            _review_candidate(
+            candidate
+            for group in groups
+            for candidate in _review_group(
                 console,
-                candidate,
+                group,
                 effective_settings.review.activity_types,
                 effective_settings.review.jira_activity_types,
                 projects,
                 profile.timezone,
             )
-            for candidate in candidates
         )
         _render_review_summary(
             console,

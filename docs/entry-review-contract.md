@@ -37,11 +37,31 @@ quality checks and activity summaries, even if they also carry other tags.
 
 ## What the prompts do
 
-For each entry needing attention, review asks about activity type, project, and
-then Jira reference, where those checks apply. Choices accept an exact,
+Review groups entries in the selected snapshot by description. Matching is
+case-insensitive after trimming the ends and collapsing whitespace runs to one
+space; punctuation and wording must otherwise match exactly. Blank descriptions
+are reviewed individually. Groups can contain nonadjacent entries, but entries
+outside the selected day or week are not considered.
+
+Each group heading shows its description, entry count, dates and times, existing
+project and activity classifications, and any inferred shared values. Only
+entries that need changes are correction targets. Fully valid matching entries
+are shown as references and remain untouched. Review uses a reference's project
+or activity type automatically when all valid references agree. If no fully
+valid reference exists, it combines usable project and activity values from
+partially valid entries. A field with conflicting values, no usable value, or
+an unavailable reference project prompts once for the whole group. Project
+choices must be active in the selected workspace.
+
+For each group, review asks about activity type, project, and then Jira
+reference, where a decision is needed. Choices accept an exact,
 case-insensitive name or an unambiguous prefix. An ambiguous prefix narrows the
-choices rather than selecting one. Enter `s` to skip the current issue or `c`
-to cancel the review.
+choices rather than selecting one. Enter `s` to skip that correction for the
+whole group or `c` to cancel the entire review. Other proposed corrections in
+the group are retained when a field is skipped. Jira requirements are
+recalculated after the shared activity type is chosen or inferred; a required
+Jira key is requested once and applied only to affected entries that lack a
+key, preserving each description's original text.
 
 Skipping leaves that issue unresolved but does not discard other corrections.
 The final summary shows proposed changes, unresolved issues, and valid,
@@ -50,9 +70,11 @@ confirms; declining or cancelling discards the in-memory proposals.
 
 An activity correction replaces the configured activity-type tags with the
 chosen canonical type, keeping unrelated tags and their order. A project
-correction sets the selected project. A Jira correction prefixes the existing
-description with the upper-case key, or uses the key alone when the description
-is empty.
+correction sets the selected project on each flagged member of the group. A
+Jira correction prefixes the existing description with the upper-case key, or
+uses the key alone when the description is empty. Automatically inferred
+corrections remain proposals and are included in the per-entry preview; no
+write occurs without the existing final confirmation.
 
 ## Activity summary
 
