@@ -98,8 +98,8 @@ def _prompt(console: Console, prompt: str) -> str:
 
 
 def _entry_prompt_label(candidate: ReviewCandidate) -> str:
-    description = candidate.proposed.description or "(no description)"
-    return f"Entry {candidate.original.id} — {description}"
+    description = " ".join(candidate.proposed.description.split()) or "(no description)"
+    return f"{description} — entry {candidate.original.id}"
 
 
 def _project_label(project_id: int | None, projects: tuple[Project, ...]) -> str:
@@ -168,7 +168,9 @@ def _review_group(
     description = (
         group.description if normalize_description(group.description) else "(no description)"
     )
-    label = f"Group {description!r} ({len(group.members)} entries)"
+    description = " ".join(description.split())
+    entry_ids = ", ".join(str(entry.id) for entry in group.members)
+    label = f"{description} — entries {entry_ids}"
     console.print(label)
     active_projects = {project.id: project for project in projects if project.active}
     fully_valid = tuple(

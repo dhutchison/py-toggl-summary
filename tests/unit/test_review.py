@@ -162,6 +162,7 @@ def test_group_uses_valid_reference_without_reprompting_and_preserves_target_tex
     assert reviewed[0].proposed.project_id == 9
     assert reference.description == "Review"
     assert reference.tags == ("doing", "email")
+    assert output.getvalue().splitlines()[0] == "Review — entries 1, 2"
     assert "Entry 1 (reference)" in output.getvalue()
     assert "Entry 2 (needs changes)" in output.getvalue()
     assert "Inferred shared activity type: doing" in output.getvalue()
@@ -371,7 +372,7 @@ def test_project_prompt_includes_entry_description(monkeypatch: pytest.MonkeyPat
         Console(file=StringIO(), no_color=True), candidate, (Project(9, "Project"),)
     )
 
-    assert "Prepare client proposal" in prompts[0]
+    assert "Prepare client proposal — entry 4513239478" in prompts[0]
 
 
 def test_project_prompt_excludes_inactive_projects() -> None:
@@ -437,7 +438,7 @@ def test_review_summary_and_cancellation_are_explicit(monkeypatch: pytest.Monkey
     assert "complete tag array" in rendered
     assert "Write readiness: blocked" in rendered
     assert "plan issue 09" in rendered
-    assert "Entry 1 — Prepare client proposal:" in rendered
+    assert "Prepare client proposal — entry 1:" in rendered
     assert "project: (none) -> Client work (9)" in rendered
 
     monkeypatch.setattr("builtins.input", lambda prompt: "c")
