@@ -221,9 +221,15 @@ def _review_group(
     project, project_conflict, project_forced_prompt = shared_project()
     activity_needs_prompt = activity is None or activity_conflict
     project_needs_prompt = project is None or project_conflict or project_forced_prompt
-    if len(group.members) > 1 and activity is not None and not activity_needs_prompt:
+    activity_already_shared = activity is not None and all(
+        effective_activity_type(entry, activity_types) == activity for entry in group.members
+    )
+    project_already_shared = project is not None and all(
+        entry.project_id == project.id for entry in group.members
+    )
+    if activity is not None and not activity_needs_prompt and not activity_already_shared:
         console.print(f"  Inferred shared activity type: {activity}")
-    if len(group.members) > 1 and project is not None and not project_needs_prompt:
+    if project is not None and not project_needs_prompt and not project_already_shared:
         console.print(f"  Inferred shared project: {project.name} ({project.id})")
 
     current = {candidate.original.id: candidate for candidate in group.candidates}

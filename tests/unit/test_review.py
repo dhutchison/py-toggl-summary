@@ -292,6 +292,33 @@ def test_single_entry_group_does_not_label_existing_activity_as_inferred(
     assert "Inferred shared activity type" not in output.getvalue()
 
 
+def test_group_does_not_label_an_activity_shared_by_every_member_as_inferred(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from toggl_cli.cli import _review_group
+
+    reference = make_entry(1, tags=("doing",), project_id=9, description="Work")
+    target = make_entry(2, tags=("doing",), project_id=None, description="work")
+    entries = (reference, target)
+    candidates = ordered_candidates(entries, 7, ("doing",))
+    group = review_groups(entries, candidates, 7)[0]
+    output = StringIO()
+    monkeypatch.setattr("builtins.input", lambda prompt: pytest.fail(prompt))
+
+    reviewed = _review_group(
+        Console(file=output, no_color=True),
+        group,
+        ("doing",),
+        (),
+        (Project(9, "Client"),),
+        UTC,
+    )
+
+    assert reviewed[0].proposed.project_id == 9
+    assert "Inferred shared activity type" not in output.getvalue()
+    assert "Inferred shared project: Client (9)" in output.getvalue()
+
+
 def test_entry_changes_include_only_changed_fields() -> None:
     original = make_entry(1, tags=("email",), project_id=None)
     candidate = candidate_for(original, ("doing",))
