@@ -155,11 +155,7 @@ class ReviewService:
             self._settings.review.activity_types,
             self._settings.review.jira_activity_types,
         )
-        projects = (
-            self._api.get_active_projects(workspace_id)
-            if any("missing_project" in candidate.issues for candidate in candidates)
-            else ()
-        )
+        projects = self._api.get_active_projects(workspace_id) if candidates else ()
         return period, profile, entries, candidates, projects
 
     def submit(

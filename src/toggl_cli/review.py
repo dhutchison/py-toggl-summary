@@ -62,6 +62,16 @@ class ReviewCandidate:
 
 
 @dataclass(frozen=True, slots=True)
+class ReviewGroup:
+    members: tuple[TimeEntry, ...]
+    candidates: tuple[ReviewCandidate, ...]
+
+    @property
+    def description(self) -> str:
+        return self.members[0].description
+
+
+@dataclass(frozen=True, slots=True)
 class WriteResult:
     success: tuple[int, ...] = ()
     failures: tuple[tuple[int, str], ...] = ()
@@ -95,6 +105,12 @@ def effective_activity_type(entry: TimeEntry, activity_types: tuple[str, ...]) -
 
 def has_jira_reference(description: str) -> bool:
     return JIRA_PATTERN.search(description) is not None
+
+
+def normalize_description(description: str) -> str:
+    """Normalize descriptions for exact activity grouping."""
+
+    return " ".join(description.split()).casefold()
 
 
 def review_state(
@@ -191,6 +207,34 @@ def ordered_candidates(
     selected.sort(key=lambda entry: (entry.start.astimezone(UTC), entry.id))
     candidates = [candidate_for(entry, activity_types, jira_activity_types) for entry in selected]
     return tuple(candidate for candidate in candidates if candidate.issues)
+
+
+def review_groups(
+    entries: tuple[TimeEntry, ...] | list[TimeEntry],
+    candidates: tuple[ReviewCandidate, ...] | list[ReviewCandidate],
+    user_id: int,
+) -> tuple[ReviewGroup, ...]:
+    """Group flagged entries with exact-description peers from the review snapshot."""
+
+    candidate_by_id = {candidate.original.id: candidate for candidate in candidates}
+    groups: dict[str, list[TimeEntry]] = {}
+    selected = sorted(
+        (entry for entry in entries if entry.user_id == user_id and not entry.is_marker),
+        key=lambda entry: (entry.start.astimezone(UTC), entry.id),
+    )
+    for entry in selected:
+        normalized = normalize_description(entry.description)
+        # Blank descriptions are intentionally unique and cannot provide references.
+        key = normalized if normalized else f"\0{entry.id}"
+        groups.setdefault(key, []).append(entry)
+    result: list[ReviewGroup] = []
+    for members in groups.values():
+        targets = tuple(
+            candidate_by_id[entry.id] for entry in members if entry.id in candidate_by_id
+        )
+        if targets:
+            result.append(ReviewGroup(tuple(members), targets))
+    return tuple(result)
 
 
 def entry_changes(original: TimeEntry, proposed: TimeEntry) -> dict[str, object]:
